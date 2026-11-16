@@ -1225,4 +1225,37 @@ config TOUCHSCREEN_ST
 
 source "drivers/input/touchscreen/st/Kconfig"
 
+config TOUCHSCREEN_ATMEL_MXT_LETV
+	tristate "Atmel mXT I2C Touchscreen for the LeTV platform"
+	depends on I2C
+	help
+	  Say Y here if you have Atmel mXT series I2C touchscreen,
+	  such as mXT640T, connected to your system.
+
+	  If unsure, say N.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called atmel_mxt_ts_letv.
+
+config TOUCHSCREEN_FTS_LETV
+	bool "FocalTech I2C Touchscreen (LeTV)"
+	depends on I2C
+	help
+	  Say Y here if you have a Focaltech I2C touchscreen
+	  connected to your LeEco/LeTV device.
+
+	  If unsure, say N.
+
+config LETVS_CLASS
+	bool "letv class for LeTV/LeEco touchscreen drivers"
+	default y if (TOUCHSCREEN_ATMEL_MXT_LETV || TOUCHSCREEN_SYNAPTICS_DSX_LETV || TOUCHSCREEN_FTS_LETV)
+	help
+	  Say Y here if you have LeTV/LeEco touchscreen drivers enabled.
+
+	  If unsure, say N.
+
+source "drivers/input/touchscreen/synaptics_dsx_letv/Kconfig"
+
+source "drivers/input/touchscreen/hideep_letv/Kconfig"
+
 endif
