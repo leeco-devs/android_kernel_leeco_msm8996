@@ -214,6 +214,15 @@ config LEDS_GPIO
 	  defined as platform devices and/or OpenFirmware platform devices.
 	  The code to use these bindings can be selected below.
 
+config LEDS_MSM_GPIO_FLASH
+	tristate "Support for GPIO Flash LEDs"
+	depends on LEDS_CLASS && GPIOLIB && OF
+	help
+	  This driver supports the leds functionality of GPIO Flash LED.
+	  It includes flash mode and torch mode.
+	  To compile this driver as a module, choose M here: the module will
+	  be called leds-msm-gpio-flash.
+
 config LEDS_LP3944
 	tristate "LED Support for N.S. LP3944 (Fun Light) I2C chip"
 	depends on LEDS_CLASS

@@ -187,6 +187,9 @@
 
 #define QPNP_WLED_SWITCH_FREQ_800_KHZ_CODE	0x0B
 #define QPNP_WLED_SWITCH_FREQ_1600_KHZ_CODE	0x05
+#ifdef CONFIG_VENDOR_LEECO
+#define QPNP_WLED_SWITCH_FREQ_600_KHZ_CODE	0x0F
+#endif
 
 #define QPNP_WLED_DISP_SEL_REG(b)	(b + 0x44)
 #define QPNP_WLED_MODULE_RDY_REG(b)	(b + 0x45)
@@ -573,6 +576,14 @@ static int qpnp_wled_set_level(struct qpnp_wled *wled, int level)
 	int i, rc;
 	u8 reg;
 	u16 low_limit = WLED_MAX_LEVEL_4095 * 4 / 1000;
+
+#ifdef CONFIG_VENDOR_LEECO
+	reg = 0x00;
+	rc = qpnp_wled_write_reg(wled,
+			QPNP_WLED_EN_PSM_REG(wled->ctrl_base), reg);
+	if (rc)
+		return rc;
+#endif
 
 	/* WLED's lower limit of operation is 0.4% */
 	if (level > 0 && level < low_limit)
@@ -1961,7 +1972,11 @@ static int qpnp_wled_config(struct qpnp_wled *wled)
 	if (wled->switch_freq_khz == 1600)
 		reg = QPNP_WLED_SWITCH_FREQ_1600_KHZ_CODE;
 	else
+#ifdef CONFIG_VENDOR_LEECO
+		reg = QPNP_WLED_SWITCH_FREQ_600_KHZ_CODE;
+#else
 		reg = QPNP_WLED_SWITCH_FREQ_800_KHZ_CODE;
+#endif
 
 	/*
 	 * Do not set the overwrite bit when switching frequency is selected
