@@ -489,6 +489,15 @@ static struct wcd_mbhc_config wcd_mbhc_cfg = {
 	.enable_anc_mic_detect = false,
 };
 
+#ifdef CONFIG_VENDOR_LEECO
+/*
+ * Set when this driver hands the Type-C CC lines over to the analog
+ * accessory path; cyccg clears it when the accessory is detached so the
+ * mode can be re-armed on the next attach.
+ */
+bool typec_set_cc_state;
+#endif
+
 static inline int param_is_mask(int p)
 {
 	return (p >= SNDRV_PCM_HW_PARAM_FIRST_MASK) &&
