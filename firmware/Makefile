@@ -136,6 +136,23 @@ fw-shipped-$(CONFIG_USB_VICAM) += vicam/firmware.fw
 fw-shipped-$(CONFIG_VIDEO_CPIA2) += cpia2/stv0672_vp4.bin
 fw-shipped-$(CONFIG_YAM) += yam/1200.bin yam/9600.bin
 
+ifdef CONFIG_VENDOR_LEECO
+fw-shipped-$(CONFIG_TOUCHSCREEN_ATMEL_MXT_LETV) += leeco/mXT640T_V10AA.fw \
+						   leeco/mXT640T_V16AA.fw \
+						   leeco/mXT640T_V30AE.fw
+endif
+ifdef CONFIG_PRODUCT_LE_X2
+fw-shipped-$(CONFIG_TOUCHKEY_ATMEGA48A_LETV) += leeco/Letv_max1_tk_58_0A_1.3_0A.fw
+fw-shipped-$(CONFIG_TOUCHSCREEN_HIDEEP_TP_LETV) += leeco/letv_x2_hideep3d_auto.bin
+fw-shipped-$(CONFIG_TOUCHSCREEN_SYNAPTICS_DSX_FW_UPDATE_LETV) += leeco/startup_fw_update_X2-02-01.img \
+								 leeco/startup_fw_update_X2-03-02.img \
+								 leeco/startup_fw_update_X2-05-01.img
+endif
+ifdef CONFIG_PRODUCT_LE_ZL1
+fw-shipped-$(CONFIG_TOUCHSCREEN_SYNAPTICS_DSX_FW_UPDATE_LETV) += leeco/startup_fw_update_ZL1-0A-01.img \
+								 leeco/startup_fw_update_ZL1-03-01.img
+endif
+
 fw-shipped-all := $(fw-shipped-y) $(fw-shipped-m) $(fw-shipped-)
 
 quiet_cmd_ihex  = IHEX    $@
