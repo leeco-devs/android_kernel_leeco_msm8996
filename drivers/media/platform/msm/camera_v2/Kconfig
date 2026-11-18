@@ -95,6 +95,13 @@ config MSM_EEPROM
           and also provides support for writing data in case of FLASH ROM.
 	  Currently supports I2C, CCI and SPI protocol
 
+config MSM_I2C_FLASH
+        bool "Letv I2C flash interface for the LM3643/LM3648 flash LED"
+        depends on MSMB_CAMERA
+        ---help---
+          Enable support for the LM3643/LM3648 flash LED chips the LeEco
+          camera nodes drive over CCI.
+
 config MSM_ISPIF
         bool "QTI MSM Image Signal Processing interface support"
         depends on MSMB_CAMERA

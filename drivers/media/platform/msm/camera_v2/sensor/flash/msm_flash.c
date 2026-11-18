@@ -19,6 +19,7 @@
 #include "msm_flash.h"
 #include "msm_camera_dt_util.h"
 #include "msm_cci.h"
+#include "lm3643.h"
 
 #undef CDBG
 #define CDBG(fmt, args...) pr_debug(fmt, ##args)
@@ -33,11 +34,15 @@ static const struct of_device_id msm_flash_dt_match[] = {
 	{}
 };
 
+static struct msm_flash_table lm3643_i2c_flash_table;
+static struct msm_flash_table lm3648_i2c_flash_table;
 static struct msm_flash_table msm_i2c_flash_table;
 static struct msm_flash_table msm_gpio_flash_table;
 static struct msm_flash_table msm_pmic_flash_table;
 
 static struct msm_flash_table *flash_table[] = {
+	&lm3643_i2c_flash_table,
+	&lm3648_i2c_flash_table,
 	&msm_i2c_flash_table,
 	&msm_gpio_flash_table,
 	&msm_pmic_flash_table
@@ -573,6 +578,14 @@ static int32_t msm_flash_prepare(
 	struct msm_flash_ctrl_t *flash_ctrl)
 {
 	int32_t ret = 0;
+
+	/*
+	 * The LM3643/LM3648 tables power their chip through their own
+	 * FLASH_EN GPIO, not through the QPNP switch regulator.
+	 */
+	if (flash_ctrl->flash_driver_type == FLASH_DRIVER_LM3643 ||
+		flash_ctrl->flash_driver_type == FLASH_DRIVER_LM3648)
+		return 0;
 
 	CDBG("%s:%d: State : %d\n",
 		__func__, __LINE__, flash_ctrl->flash_state);
@@ -1123,6 +1136,10 @@ static int32_t msm_flash_get_dt_data(struct device_node *of_node,
 		/* Set default master 0 */
 		fctrl->cci_i2c_master = MASTER_0;
 		rc = 0;
+	} else if (of_property_match_string(of_node, "label", LM3643_NAME) >= 0) {
+		/* LeEco parts: LM3643 on CCI master 0, LM3648 on master 1 */
+		fctrl->flash_driver_type = fctrl->cci_i2c_master ?
+			FLASH_DRIVER_LM3648 : FLASH_DRIVER_LM3643;
 	} else {
 		fctrl->flash_driver_type = FLASH_DRIVER_I2C;
 	}
@@ -1236,6 +1253,23 @@ static long msm_flash_subdev_fops_ioctl(struct file *file,
 	return video_usercopy(file, cmd, arg, msm_flash_subdev_do_ioctl);
 }
 #endif
+static int32_t msm_flash_get_i2c_addr(struct device_node *of_node,
+	struct msm_flash_ctrl_t *fctrl)
+{
+	int32_t rc = 1;
+	uint32_t id_info[3];
+
+	rc = of_property_read_u32_array(of_node, "qcom,slave-id",
+		id_info, 3);
+	if (rc < 0) {
+		pr_err("%s failed %d\n", __func__, __LINE__);
+		return rc;
+	}
+	fctrl->flash_i2c_client.cci_client->sid = id_info[0];
+
+	return rc;
+}
+
 static int32_t msm_flash_platform_probe(struct platform_device *pdev)
 {
 	int32_t rc = 0;
@@ -1267,6 +1301,11 @@ static int32_t msm_flash_platform_probe(struct platform_device *pdev)
 	}
 
 	flash_ctrl->flash_state = MSM_CAMERA_FLASH_RELEASE;
+	/*
+	 * The LM3643/LM3648 tables keep their own power state and switch the
+	 * chip on in their first init, so start them out powered down.
+	 */
+	flash_ctrl->power_state = MSM_CAMERA_POWER_RELEASE;
 	flash_ctrl->power_info.dev = &flash_ctrl->pdev->dev;
 	flash_ctrl->flash_device_type = MSM_CAMERA_PLATFORM_DEVICE;
 	flash_ctrl->flash_mutex = &msm_flash_mutex;
@@ -1282,6 +1321,14 @@ static int32_t msm_flash_platform_probe(struct platform_device *pdev)
 	cci_client = flash_ctrl->flash_i2c_client.cci_client;
 	cci_client->cci_subdev = msm_cci_get_subdev();
 	cci_client->cci_i2c_master = flash_ctrl->cci_i2c_master;
+	/*
+	 * The LM3643/LM3648 tables write through the CCI client directly
+	 * instead of going through msm_flash_i2c_init(), which is where the
+	 * stock tables pick up the slave address, so program it here.
+	 */
+	if (flash_ctrl->flash_driver_type == FLASH_DRIVER_LM3643 ||
+		flash_ctrl->flash_driver_type == FLASH_DRIVER_LM3648)
+		msm_flash_get_i2c_addr(pdev->dev.of_node, flash_ctrl);
 
 	/* Initialize sub device */
 	v4l2_subdev_init(&flash_ctrl->msm_sd.sd, &msm_flash_subdev_ops);
@@ -1375,6 +1422,28 @@ static struct msm_flash_table msm_i2c_flash_table = {
 		.camera_flash_low = msm_flash_i2c_write_setting_array,
 		.camera_flash_high = msm_flash_i2c_write_setting_array,
 		.camera_flash_query_current = NULL,
+	},
+};
+
+static struct msm_flash_table lm3643_i2c_flash_table = {
+	.flash_driver_type = FLASH_DRIVER_LM3643,
+	.func_tbl = {
+		.camera_flash_init = lm3643_flash_led_init,
+		.camera_flash_release = lm3643_flash_led_release,
+		.camera_flash_off = lm3643_flash_led_off,
+		.camera_flash_low = lm3643_flash_led_low,
+		.camera_flash_high = lm3643_flash_led_high,
+	},
+};
+
+static struct msm_flash_table lm3648_i2c_flash_table = {
+	.flash_driver_type = FLASH_DRIVER_LM3648,
+	.func_tbl = {
+		.camera_flash_init = lm3643_flash_led_init,
+		.camera_flash_release = lm3643_flash_led_release,
+		.camera_flash_off = lm3643_flash_led_off,
+		.camera_flash_low = lm3643_flash_led_low,
+		.camera_flash_high = lm3643_flash_led_high,
 	},
 };
 
