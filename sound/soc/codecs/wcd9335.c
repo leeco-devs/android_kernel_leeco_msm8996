@@ -166,6 +166,11 @@ enum tasha_sido_voltage {
 	SIDO_VOLTAGE_NOMINAL_MV = 1100,
 };
 
+#ifdef CONFIG_VENDOR_LEECO
+extern bool letv_typec_plug_state;
+extern bool letv_typec_4_pole;
+#endif
+
 static enum codec_variant codec_ver;
 
 static int dig_core_collapse_enable = 1;
@@ -686,6 +691,14 @@ static struct wcd_mbhc_register
 			  0, 0, 0, 0),
 	WCD_MBHC_REGISTER("WCD_MBHC_MUX_CTL",
 			  WCD9335_MBHC_CTL_2, 0x70, 4, 0),
+
+#ifdef CONFIG_VENDOR_LEECO
+	/* add for headset mic swap from IN2P to IN3P automaticly*/
+	WCD_MBHC_REGISTER("WCD_MBHC_HS_VREF_INP",
+			  WCD9335_MBHC_CTL_2, 0x70, 4, 0),
+	WCD_MBHC_REGISTER("WCD_MBHC_AMIC2_HOLD_EN",
+			  WCD9335_ANA_AMIC2, 0x20, 5, 0),
+#endif
 };
 
 static const struct wcd_mbhc_intr intr_ids = {
@@ -1651,14 +1664,36 @@ static int tasha_micbias_control(struct snd_soc_codec *codec,
 		if (tasha->micb_ref[micb_index] > 0)
 			tasha->micb_ref[micb_index]--;
 		if ((tasha->micb_ref[micb_index] == 0) &&
-		    (tasha->pullup_ref[micb_index] > 0))
+		    (tasha->pullup_ref[micb_index] > 0)) {
+#ifdef CONFIG_VENDOR_LEECO
+			if (letv_typec_4_pole && letv_typec_plug_state &&
+				(micb_num == MIC_BIAS_2)) {
+				snd_soc_update_bits(codec, micb_reg, 0xC0, 0xC0);
+				pr_info("1: letv_headset still pluged!!\n");
+			} else {
+				pr_info("1: micb disable, micb_num(%d)!!\n", micb_num);
+				snd_soc_update_bits(codec, micb_reg, 0xC0, 0x80);
+			}
+#else
 			snd_soc_update_bits(codec, micb_reg, 0xC0, 0x80);
-		else if ((tasha->micb_ref[micb_index] == 0) &&
+#endif
+		} else if ((tasha->micb_ref[micb_index] == 0) &&
 			 (tasha->pullup_ref[micb_index] == 0)) {
 			if (pre_off_event)
 				blocking_notifier_call_chain(&tasha->notifier,
 						pre_off_event, &tasha->mbhc);
+#ifdef CONFIG_VENDOR_LEECO
+			if (letv_typec_4_pole && letv_typec_plug_state &&
+				(micb_num == MIC_BIAS_2)) {
+				snd_soc_update_bits(codec, micb_reg, 0xC0, 0x40);
+				pr_info("2: letv_headset still pluged!!\n");
+			} else {
+				pr_info("2: micb disable, micb_num(%d)!!\n", micb_num);
+				snd_soc_update_bits(codec, micb_reg, 0xC0, 0x00);
+			}
+#else
 			snd_soc_update_bits(codec, micb_reg, 0xC0, 0x00);
+#endif
 			if (post_off_event)
 				blocking_notifier_call_chain(&tasha->notifier,
 						post_off_event, &tasha->mbhc);
@@ -8720,6 +8755,7 @@ static const struct snd_kcontrol_new tasha_snd_controls[] = {
 	SOC_ENUM_EXT("GSM mode Enable", tasha_vbat_gsm_mode_enum,
 			tasha_vbat_gsm_mode_func_get,
 			tasha_vbat_gsm_mode_func_put),
+
 };
 
 static int tasha_put_dec_enum(struct snd_kcontrol *kcontrol,

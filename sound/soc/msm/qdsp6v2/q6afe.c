@@ -128,6 +128,11 @@ struct afe_ctl {
 	bool alloced_rddma[AFE_MAX_RDDMA];
 	int num_alloced_wrdma;
 	bool alloced_wrdma[AFE_MAX_WRDMA];
+#ifdef CONFIG_SND_SOC_MAX98927
+	/* Where sp_make_afe_callback() puts a DSM get response. */
+	uint8_t *dsm_payload;
+	int dsm_payload_size;
+#endif
 };
 
 static atomic_t afe_ports_mad_type[SLIMBUS_PORT_LAST - SLIMBUS_0_RX];
@@ -363,6 +368,38 @@ static int32_t sp_make_afe_callback(uint32_t opcode, uint32_t *payload,
 		pr_err("%s: Unrecognized command %d\n", __func__, opcode);
 		return -EINVAL;
 	}
+
+#ifdef CONFIG_SND_SOC_MAX98927
+	/*
+	 * Answer a DSM get into the buffer its caller left in dsm_payload. A
+	 * response for the same parameter with no read outstanding belongs to
+	 * someone else and falls through to the generic path below, so its wait
+	 * is not completed here.
+	 */
+	if (param_hdr.param_id == AFE_PARAM_ID_DSM_CFG &&
+	    this_afe.dsm_payload) {
+		int hdr_size = 4 * sizeof(uint32_t);
+
+		if (param_hdr.param_size > this_afe.dsm_payload_size ||
+		    payload_size < hdr_size + param_hdr.param_size) {
+			pr_err("%s: DSM reply %d, packet %d, buffer %d\n",
+			       __func__, param_hdr.param_size, payload_size,
+			       this_afe.dsm_payload_size);
+			atomic_set(&this_afe.state, -1);
+			return 0;
+		}
+
+		/* The parameter block is the response, without its headers. */
+		memcpy(this_afe.dsm_payload, data_start, param_hdr.param_size);
+		if (payload[0]) {
+			pr_debug("%s: DSM resp status: %d\n", __func__, payload[0]);
+			atomic_set(&this_afe.state, -1);
+		} else {
+			atomic_set(&this_afe.state, 0);
+		}
+		return 0;
+	}
+#endif
 
 	switch (param_hdr.param_id) {
 	case AFE_PARAM_ID_CALIB_RES_CFG_V2:
@@ -1323,6 +1360,47 @@ static int q6afe_get_params(u16 port_id, struct mem_mapping_hdr *mem_hdr,
 	else
 		return q6afe_get_params_v2(port_id, index, NULL, param_hdr);
 }
+
+#ifdef CONFIG_SND_SOC_MAX98927
+/*
+ * Send the smart PA's DSM parameter block to the DSP, or read the current one
+ * back into the same buffer. max98927.c owns the block layout; this only wraps
+ * it in an AFE_PORT_CMD_SET_PARAM_V2/GET_PARAM_V2 command for
+ * AFE_DSM_RX_PORT_ID and, for a read, hands the response back through
+ * sp_make_afe_callback().
+ */
+int afe_dsm_setget_params(uint8_t *payload, int size, int dir)
+{
+	struct param_hdr_v3 param_hdr;
+	int ret;
+
+	if (!payload || size <= 0)
+		return -EINVAL;
+
+	memset(&param_hdr, 0, sizeof(param_hdr));
+	param_hdr.module_id = AFE_MODULE_DSM_RX;
+	param_hdr.instance_id = INSTANCE_ID_0;
+	param_hdr.param_id = AFE_PARAM_ID_DSM_CFG;
+	param_hdr.param_size = size;
+
+	if (!dir) {
+		int index = q6audio_get_port_index(AFE_DSM_RX_PORT_ID);
+
+		return q6afe_pack_and_set_param_in_band(AFE_DSM_RX_PORT_ID,
+							index, param_hdr,
+							payload);
+	}
+
+	this_afe.dsm_payload = payload;
+	this_afe.dsm_payload_size = size;
+	ret = q6afe_get_params(AFE_DSM_RX_PORT_ID, NULL, &param_hdr);
+	this_afe.dsm_payload = NULL;
+	this_afe.dsm_payload_size = 0;
+
+	return ret;
+}
+EXPORT_SYMBOL(afe_dsm_setget_params);
+#endif
 
 /*
  * This function shouldn't be called directly. Instead call
@@ -4030,7 +4108,11 @@ int afe_loopback(u16 enable, u16 rx_port, u16 tx_port)
 	param_hdr.param_size = sizeof(struct afe_loopback_cfg_v1);
 
 	lb_param.dst_port_id = rx_port;
+#ifdef CONFIG_VENDOR_LEECO
+	lb_param.routing_mode = LB_MODE_EC_REF_VOICE_AUDIO;
+#else
 	lb_param.routing_mode = LB_MODE_DEFAULT;
+#endif
 	lb_param.enable = (enable ? 1 : 0);
 	lb_param.loopback_cfg_minor_version = AFE_API_VERSION_LOOPBACK_CONFIG;
 

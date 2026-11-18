@@ -11739,4 +11739,15 @@ struct admx_sec_primary_mic_ch {
 */
 #define AUDPROC_MODULE_ID_DTMF_DETECTION        0x00010940
 
+/*
+ * DSM (dynamic speaker management) runs on the smart PA's feedback port.
+ * The machine driver routes the speaker through the tertiary MI2S RX port and
+ * max98927.c pushes its tuning blocks to the DSP with these ids.
+ */
+#ifdef CONFIG_SND_SOC_MAX98927
+#define AFE_MODULE_DSM_RX				0x10001062
+#define AFE_PARAM_ID_DSM_CFG				0x10001066
+#define AFE_DSM_RX_PORT_ID				AFE_PORT_ID_TERTIARY_MI2S_RX
+#endif
+
 #endif /*_APR_AUDIO_V2_H_ */
