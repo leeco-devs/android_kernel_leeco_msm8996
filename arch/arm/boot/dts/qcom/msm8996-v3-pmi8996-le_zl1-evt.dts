@@ -23,3 +23,16 @@
 	compatible = "qcom,msm8996-mtp", "qcom,msm8996", "qcom,mtp";
 	qcom,board-id = <8 0xA1>;
 };
+
+/* Only the EVT boards carry the Pericom part, so keep it off elsewhere. */
+&soc {
+	pi5usb_driver {
+		status = "ok";
+	};
+};
+
+&i2c_6 {
+	pi5usb@1d {
+		status = "ok";
+	};
+};
