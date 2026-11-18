@@ -399,6 +399,7 @@ enum wake_reason {
 #define SW_AICL_ICL_VOTER	"SW_AICL_ICL_VOTER"
 #define CHG_SUSPEND_WORKAROUND_ICL_VOTER "CHG_SUSPEND_WORKAROUND_ICL_VOTER"
 #define SHUTDOWN_WORKAROUND_ICL_VOTER "SHUTDOWN_WORKAROUND_ICL_VOTER"
+#define PD_ICL_VOTER		"PD_ICL_VOTER"
 
 /* USB SUSPEND VOTERS */
 /* userspace has suspended charging altogether */
@@ -4986,6 +4987,21 @@ static int smbchg_restricted_charging(struct smbchg_chip *chip, bool enable)
 	return rc;
 }
 
+#ifdef CONFIG_VENDOR_LEECO
+static void smbchg_pd_icl_release(struct smbchg_chip *chip)
+{
+	int rc;
+
+	/* handle_usb_removal() also runs on probe failures, before votables exist. */
+	if (!chip || !chip->usb_icl_votable)
+		return;
+
+	rc = vote(chip->usb_icl_votable, PD_ICL_VOTER, false, 0);
+	if (rc < 0)
+		pr_err("failed to release PD ICL vote rc=%d\n", rc);
+}
+#endif
+
 static void handle_usb_removal(struct smbchg_chip *chip)
 {
 	struct power_supply *parallel_psy = get_parallel_psy(chip);
@@ -4993,6 +5009,10 @@ static void handle_usb_removal(struct smbchg_chip *chip)
 	int rc;
 
 	pr_smb(PR_STATUS, "triggered\n");
+#ifdef CONFIG_VENDOR_LEECO
+	/* The negotiated PD limit must not outlive the adapter. */
+	smbchg_pd_icl_release(chip);
+#endif
 	smbchg_aicl_deglitch_wa_check(chip);
 	/* Clear the OV detected status set before */
 	if (chip->usb_ov_det)
@@ -8943,6 +8963,120 @@ static void rerun_hvdcp_det_if_necessary(struct smbchg_chip *chip)
 	}
 }
 
+#ifdef CONFIG_VENDOR_LEECO
+enum le_pd_type {
+	LE_PD_TYPE_UNKNOWN = 0,
+	LE_PD_TYPE_EV_24ACN,
+	LE_PD_TYPE_EV_24AEU,
+	LE_PD_TYPE_EV_24AIN,
+	LE_PD_TYPE_EV_24AUK,
+};
+
+struct le_pd_type_info {
+	const char *name;
+	int type;
+	u32 ver;
+};
+
+static const struct le_pd_type_info le_pd_type_val[] = {
+	{ "EV_24ACN", LE_PD_TYPE_EV_24ACN, 0x1121 },
+	{ "EV_24AEU", LE_PD_TYPE_EV_24AEU, 0x1221 },
+	{ "EV_24AIN", LE_PD_TYPE_EV_24AIN, 0x1321 },
+	{ "EV_24AUK", LE_PD_TYPE_EV_24AUK, 0x1421 },
+	{ NULL, LE_PD_TYPE_UNKNOWN, 0 },
+};
+
+/* Step tables the LeEco PD adapters are allowed to negotiate around. */
+static const int le_pd_vol_table[] = {
+	3000, 3200, 3400, 3600, 3800, 4000, 4200, 4400, 4600, 4800, 5000,
+	5200, 5400, 5600, 5800, 6000, 6200, 6400, 6600, 6800, 7000, 7200,
+	7400, 7600, 7800, 8000, 8200, 8400, 8600, 8800, 9000,
+};
+
+static const int le_pd_ma_table[] = {
+	0, 2000, 2200, 2400, 2600, 2800, 3000, 3200, 3400, 3600, 3800,
+	4000, 4200, 4400, 4600, 4800,
+};
+
+static struct smbchg_chip *pd_smbchg_chip;
+static int le_pd_type_flag = LE_PD_TYPE_UNKNOWN;
+static int pd_init_voltage;
+static int pd_init_ma;
+static bool delay_pd_state;
+
+/*
+ * Called by letv_pd when the adapter advertises its voltage and current.
+ * The negotiated current becomes a USB ICL vote; the voltage is only kept,
+ * since the charger is fed whatever the adapter settles on.
+ */
+int letv_pd_notice_charger_in_parameter(int voltage, int mA)
+{
+	struct smbchg_chip *chip = pd_smbchg_chip;
+
+	pr_smb(PR_STATUS, "pd detected: vol: %d, cur: %d\n", voltage, mA);
+
+	if (find_smaller_in_array(le_pd_vol_table, voltage,
+				ARRAY_SIZE(le_pd_vol_table)) < 0) {
+		pr_err("voltage set by pd is error\n");
+		goto err;
+	}
+	pd_init_voltage = voltage;
+
+	if (find_smaller_in_array(le_pd_ma_table, mA,
+				ARRAY_SIZE(le_pd_ma_table)) < 0) {
+		pr_err("current set by pd is error\n");
+		goto err;
+	}
+	pd_init_ma = mA;
+
+	if (!chip) {
+		pr_smb(PR_STATUS, "pd insert but charger not ready\n");
+		delay_pd_state = true;
+		return 0;
+	}
+
+	/* A new notice replaces the previous adapter's limit. */
+	smbchg_pd_icl_release(chip);
+	if (vote(chip->usb_icl_votable, PD_ICL_VOTER, true, pd_init_ma) < 0)
+		pr_err("failed to vote %dmA for PD\n", pd_init_ma);
+
+	return 0;
+err:
+	le_pd_type_flag = LE_PD_TYPE_UNKNOWN;
+	pd_init_voltage = 0;
+	pd_init_ma = 0;
+	smbchg_pd_icl_release(pd_smbchg_chip);
+	return -EINVAL;
+}
+EXPORT_SYMBOL(letv_pd_notice_charger_in_parameter);
+
+/* Called by letv_pd once it has read the adapter's PD version. */
+int letv_pd_notice_ver_just_vol(unsigned char *pd_ver, int size)
+{
+	u32 pd_version;
+	int i;
+
+	if (!pd_ver || size < 4)
+		return -EINVAL;
+
+	pd_version = ((u32)pd_ver[0] << 24) | ((u32)pd_ver[1] << 16) |
+		     ((u32)pd_ver[2] << 8) | (u32)pd_ver[3];
+
+	for (i = 0; le_pd_type_val[i].name; i++) {
+		if (pd_version == le_pd_type_val[i].ver) {
+			le_pd_type_flag = le_pd_type_val[i].type;
+			pr_smb(PR_STATUS, "le pd type: %d\n", le_pd_type_flag);
+			return 0;
+		}
+	}
+
+	pr_smb(PR_STATUS, "notice charger is not leshi pd\n");
+	le_pd_type_flag = LE_PD_TYPE_UNKNOWN;
+	return 0;
+}
+EXPORT_SYMBOL(letv_pd_notice_ver_just_vol);
+#endif
+
 static int smbchg_probe(struct platform_device *pdev)
 {
 	int rc;
@@ -9376,6 +9510,16 @@ static int smbchg_probe(struct platform_device *pdev)
 			chip->revision[ANA_MAJOR], chip->revision[ANA_MINOR],
 			get_prop_batt_present(chip),
 			chip->dc_present, chip->usb_present);
+
+#ifdef CONFIG_VENDOR_LEECO
+	pd_smbchg_chip = chip;
+	/* An adapter that arrived before probe could only be recorded. */
+	if (delay_pd_state) {
+		letv_pd_notice_charger_in_parameter(pd_init_voltage, pd_init_ma);
+		delay_pd_state = false;
+	}
+#endif
+
 	return 0;
 
 unregister_led_class:
@@ -9411,6 +9555,9 @@ static int smbchg_remove(struct platform_device *pdev)
 {
 	struct smbchg_chip *chip = dev_get_drvdata(&pdev->dev);
 
+#ifdef CONFIG_VENDOR_LEECO
+	pd_smbchg_chip = NULL;
+#endif
 #ifdef CONFIG_QPNP_MHL
 	mhl_kobj_exit();
 #endif
