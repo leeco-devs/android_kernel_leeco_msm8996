@@ -1166,14 +1166,20 @@ typedef enum
 
 } MAX98927Registers;
 
+struct i2c_client;
+
 struct max98927_priv {
+	/* Device the codec is registered against, i.e. the second amp. */
 	struct device *dev;
-	/* Device the codec was registered against, i.e. the second amp. */
-	char codec_name[32];
+	/* The two amp clients sharing this state; the pair is the reference. */
+	struct i2c_client *client_l;
+	struct i2c_client *client_r;
+	bool codec_registered;
+	bool dsm_registered;
+	bool f0_registered;
 	struct regmap *regmap_l;
 	struct regmap *regmap_r;
 	struct regmap *regmap;
-	struct snd_soc_codec *codec;
 	struct max98927_pdata *pdata;
 	//struct i2c_client *client;
 	unsigned int spk_mode;
@@ -1216,7 +1222,7 @@ struct max98927_priv {
 	unsigned int digital_gain;
 	unsigned int pdm_gain;
 	unsigned int level_hold;
-	unsigned int reset_gpio;
+	int reset_gpio;
 };
 
 #define MAX98927_GLOBAL_SHIFT 0

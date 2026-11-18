@@ -74,6 +74,11 @@ typedef struct dsm_params {
 static int i2c_states = -1;
 /* Shared by both amp nodes; the pair is completed by whichever probes last. */
 static struct max98927_priv *max98927_shared;
+/*
+ * Device the codec registered against.  It lives outside the shared state so
+ * that max98927_get_codec_name() cannot chase a state that has been freed.
+ */
+static char max98927_codec_name[32];
 
 int reg_common_map[][2] = {
 	{MAX98927_Brownout_level_infinite_hold,  0x00},
@@ -1489,7 +1494,6 @@ static int max98927_probe(struct snd_soc_codec *codec)
 	int i;
 	pr_info("------%s------\n", __func__);
 
-	max98927->codec = codec;
 	codec->control_data = max98927->regmap_l;
 	codec->cache_bypass = 1;
 
@@ -1537,11 +1541,68 @@ EXPORT_SYMBOL(max98927_get_i2c_states);
  */
 const char *max98927_get_codec_name(void)
 {
-	if (!max98927_shared || i2c_states)
+	if (!max98927_codec_name[0])
 		return NULL;
-	return max98927_shared->codec_name;
+	return max98927_codec_name;
 }
 EXPORT_SYMBOL(max98927_get_codec_name);
+
+/*
+ * Tear down what was registered for the pair.  The shared state itself stays:
+ * the other amp may still be bound, and probing it again rebuilds the codec.
+ */
+static void max98927_release_common(struct max98927_priv *priv)
+{
+	if (priv->codec_registered) {
+		snd_soc_unregister_codec(priv->dev);
+		priv->codec_registered = false;
+	}
+
+#ifdef USE_DSM_MISC_DEV
+	if (priv->dsm_registered) {
+		misc_deregister(&dsm_ctrl_miscdev);
+		priv->dsm_registered = false;
+	}
+#endif
+#ifdef F0_DETECT
+	if (priv->f0_registered) {
+		f0_detect_deinit();
+		priv->f0_registered = false;
+	}
+#endif
+
+	priv->dev = NULL;
+	max98927_codec_name[0] = '\0';
+	i2c_states = -1;
+}
+
+/*
+ * Drop one amp.  Its regmap is devm-managed by that client, so the pointer
+ * goes with it.  Returns true when the state has no amp left.
+ */
+static bool max98927_detach(struct max98927_priv *priv,
+			    struct i2c_client *client)
+{
+	i2c_set_clientdata(client, NULL);
+	if (priv->client_l == client) {
+		priv->client_l = NULL;
+		priv->regmap_l = NULL;
+	} else if (priv->client_r == client) {
+		priv->client_r = NULL;
+		priv->regmap_r = NULL;
+	}
+
+	return !priv->client_l && !priv->client_r;
+}
+
+/* Last amp gone: the state and the reset line it owns go with it. */
+static void max98927_free(struct max98927_priv *priv)
+{
+	if (max98927_shared == priv)
+		max98927_shared = NULL;
+	gpio_free(priv->reset_gpio);
+	kfree(priv);
+}
 
 int probe_common(struct i2c_client *i2c, struct max98927_priv *max98927) {
 	int ret = -1, ret_l = -1, ret_r = -1, reg = 0, value;
@@ -1584,25 +1645,30 @@ int probe_common(struct i2c_client *i2c, struct max98927_priv *max98927) {
 			max98927_dai, ARRAY_SIZE(max98927_dai));
 	if (ret < 0) {
 		pr_info("Failed to register codec: %d\n", ret);
-		if(max98927->regmap_l)
-			regmap_exit(max98927->regmap_l);
-		if(max98927->regmap_r)
-			regmap_exit(max98927->regmap_r);
-		kfree(max98927);
 		return ret;
 	}
-	snprintf(max98927->codec_name, sizeof(max98927->codec_name), "%s",
+	/*
+	 * The codec is registered against the amp that completed the pair,
+	 * which is not necessarily the one that probed first, so remember
+	 * that device: max98927_release_common() unregisters through it.
+	 */
+	max98927->dev = &i2c->dev;
+	snprintf(max98927_codec_name, sizeof(max98927_codec_name), "%s",
 		 dev_name(&i2c->dev));
+	max98927->codec_registered = true;
 	i2c_states = 0;
 
 #ifdef USE_DSM_MISC_DEV
 	ret = misc_register(&dsm_ctrl_miscdev);
 	if (ret != 0)
 		pr_err("max98927 misc_register dsm error:%d\n", ret);
+	else
+		max98927->dsm_registered = true;
 #endif
 
 #ifdef F0_DETECT
-	f0_detect_init();
+	if (!f0_detect_init())
+		max98927->f0_registered = true;
 #endif
 
 	return 0;
@@ -1611,105 +1677,117 @@ int probe_common(struct i2c_client *i2c, struct max98927_priv *max98927) {
 static int max98927_i2c_probe(struct i2c_client *i2c,
 		const struct i2c_device_id *id)
 {
-	int ret = 0, value;
-	pr_info("------%s  name:%s------\n", __func__, i2c->name);
-	if (!max98927_shared) {
-		max98927_shared = devm_kzalloc(&i2c->dev,
-				sizeof(*max98927_shared), GFP_KERNEL);
-		if (!max98927_shared) {
-			pr_info("------%s devm_kzalloc error!!\n", __func__);
-			return -ENOMEM;
-		}
-		max98927_shared->dev = &i2c->dev;
+	struct max98927_priv *priv = max98927_shared;
+	int ret = 0, value, gpio;
 
-		max98927_shared->reset_gpio =
-			of_get_named_gpio_flags(i2c->dev.of_node,
-					"maxim,98927-reset-gpio", 0, NULL);
-		ret = gpio_request(max98927_shared->reset_gpio,
-				   "max_98927_reset");
+	pr_info("------%s  name:%s------\n", __func__, i2c->name);
+
+	if (!priv) {
+		/*
+		 * Both amp nodes describe the same reset line, so whichever amp
+		 * probes first takes it and the second one reuses it.
+		 */
+		gpio = of_get_named_gpio_flags(i2c->dev.of_node,
+				"maxim,98927-reset-gpio", 0, NULL);
+		if (!gpio_is_valid(gpio)) {
+			pr_err("max98927_i2c_probe : no reset gpio, error:%d\n",
+			       gpio);
+			return gpio;
+		}
+
+		ret = gpio_request(gpio, "max_98927_reset");
 		if (ret) {
 			pr_err("max98927_i2c_probe : failed to request rest gpio %d error:%d\n",
-					max98927_shared->reset_gpio, ret);
-			gpio_free(max98927_shared->reset_gpio);
+			       gpio, ret);
 			return ret;
 		}
-		gpio_direction_output(max98927_shared->reset_gpio, 1);
+		gpio_direction_output(gpio, 1);
 
+		priv = kzalloc(sizeof(*priv), GFP_KERNEL);
+		if (!priv) {
+			gpio_free(gpio);
+			return -ENOMEM;
+		}
+		priv->reset_gpio = gpio;
+		max98927_shared = priv;
 	}
-	i2c_set_clientdata(i2c, max98927_shared);
+
+	i2c_set_clientdata(i2c, priv);
+	if (id->driver_data == MAX98927L)
+		priv->client_l = i2c;
+	else if (id->driver_data == MAX98927R)
+		priv->client_r = i2c;
+
 	if (!of_property_read_u32(i2c->dev.of_node, "mono_stereo_mode", &value)) {
 		if (value > 1) {
 			pr_info("mono_stereo number is wrong:\n");
 		}
-		max98927_shared->mono_stereo = value;
+		priv->mono_stereo = value;
 	}
 
 	if (!of_property_read_u32(i2c->dev.of_node, "interleave_mode", &value)) {
 		if (value > 1) {
 			pr_info("interleave number is wrong:\n");
 		}
-		max98927_shared->interleave_mode = value;
+		priv->interleave_mode = value;
 	}
 
-	/* by default we are assuming interleave mode */
 	if (id->driver_data == MAX98927L) {
-		max98927_shared->regmap_l =
-			devm_regmap_init_i2c(i2c, &max98927_regmap);
-		if (IS_ERR(max98927_shared->regmap_l)) {
-			ret = PTR_ERR(max98927_shared->regmap_l);
-			dev_err(&i2c->dev,
-					"Failed to allocate regmap_l: %d\n", ret);
+		priv->regmap_l = devm_regmap_init_i2c(i2c, &max98927_regmap);
+		if (IS_ERR(priv->regmap_l)) {
+			ret = PTR_ERR(priv->regmap_l);
+			priv->regmap_l = NULL;
+			dev_err(&i2c->dev, "Failed to allocate regmap_l: %d\n",
+				ret);
 		}
-
-	} else {/* check for second MAX98927 */
-		if (id->driver_data == MAX98927R) {
-			max98927_shared->regmap_r =
-				devm_regmap_init_i2c(i2c, &max98927_regmap);
-			if (IS_ERR(max98927_shared->regmap_r)) {
-				ret = PTR_ERR(max98927_shared->regmap_r);
-				dev_err(&i2c->dev,
-						"Failed to allocate regmap_r: %d\n", ret);
-			}
+	} else if (id->driver_data == MAX98927R) {
+		priv->regmap_r = devm_regmap_init_i2c(i2c, &max98927_regmap);
+		if (IS_ERR(priv->regmap_r)) {
+			ret = PTR_ERR(priv->regmap_r);
+			priv->regmap_r = NULL;
+			dev_err(&i2c->dev, "Failed to allocate regmap_r: %d\n",
+				ret);
 		}
 	}
+	if (ret)
+		goto err;
 
-	if (max98927_shared->mono_stereo) {
-		if (max98927_shared->regmap_r && max98927_shared->regmap_l)
-			ret = probe_common(i2c, max98927_shared);
-	} else if (max98927_shared->regmap_l && !max98927_shared->mono_stereo) {
-		ret = probe_common(i2c, max98927_shared);
+	if (priv->mono_stereo) {
+		if (priv->regmap_l && priv->regmap_r)
+			ret = probe_common(i2c, priv);
+	} else if (priv->regmap_l) {
+		ret = probe_common(i2c, priv);
 	}
+	if (ret)
+		goto err;
+
+	return 0;
+
+err:
+	/* This amp is not usable, so the codec cannot stay up either. */
+	max98927_release_common(priv);
+	if (!max98927_detach(priv, i2c))
+		return ret;
+	max98927_free(priv);
 
 	return ret;
 }
 
 static int max98927_i2c_remove(struct i2c_client *client)
 {
-	struct max98927_priv *max98927 = i2c_get_clientdata(client);
-	if(max98927) {
-		if(max98927->dev == &client->dev) {
-			snd_soc_unregister_codec(&client->dev);
-			if(max98927->regmap_l)
-				regmap_exit(max98927->regmap_l);
-			if(max98927->regmap_r)
-				regmap_exit(max98927->regmap_r);
-			/*
-			 * max98927_get_codec_name() reads the shared pointer,
-			 * so drop it before the last reference goes away.
-			 */
-			if (max98927_shared == max98927) {
-				max98927_shared = NULL;
-				i2c_states = -1;
-			}
-			kfree(max98927);
-#ifdef F0_DETECT
-			f0_detect_deinit();
-#endif
-		}
-	}
-#ifdef USE_DSM_MISC_DEV
-	misc_deregister(&dsm_ctrl_miscdev);
-#endif
+	struct max98927_priv *priv = i2c_get_clientdata(client);
+
+	if (!priv)
+		return 0;
+
+	/*
+	 * The codec writes to both amps, so it cannot outlive either of
+	 * them.
+	 */
+	max98927_release_common(priv);
+	if (!max98927_detach(priv, client))
+		return 0;
+	max98927_free(priv);
 
 	return 0;
 }
