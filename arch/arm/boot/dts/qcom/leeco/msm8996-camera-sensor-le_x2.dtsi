@@ -82,7 +82,7 @@
 		cell-index = <0>;
 		reg = <0x0>;
 		qcom,eeprom-name = "sony_imx230_plus";
-		compatible = "qcom,eeprom";
+		compatible = "letv,eeprom";
 		qcom,slave-addr = <0x34>;
 		qcom,i2c-freq-mode = <1>;
 		qcom,cci-master = <0>;
@@ -141,7 +141,7 @@
 		cell-index = <1>;
 		reg = <0x1>;
 		qcom,eeprom-name = "ov8865";
-		compatible = "qcom,eeprom";
+		compatible = "letv,eeprom";
 		qcom,slave-addr = <0x20>;
 		qcom,i2c-freq-mode = <1>;
 		qcom,cci-master = <1>;
