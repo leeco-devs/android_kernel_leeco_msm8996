@@ -27,6 +27,26 @@
 static struct v4l2_file_operations msm_sensor_v4l2_subdev_fops;
 static int32_t msm_sensor_driver_platform_probe(struct platform_device *pdev);
 
+static uint8_t g_front_camera_lot_id[MSM_OTP_FRONT_CAMERA_ID_BUFF_SIZE];
+static uint8_t g_rear_camera_lot_id[MSM_OTP_REAR_CAMERA_ID_BUFF_SIZE];
+
+extern int msm_get_otp_data(uint8_t *, uint32_t, uint16_t);
+
+static ssize_t fcid_show(struct device *dev, struct device_attribute *attr,
+	char *buf)
+{
+	return snprintf(buf, 33, "%s", g_front_camera_lot_id);
+}
+
+static ssize_t bcid_show(struct device *dev, struct device_attribute *attr,
+	char *buf)
+{
+	return snprintf(buf, 17, "%s", g_rear_camera_lot_id);
+}
+
+static DEVICE_ATTR(fcid, S_IRUGO, fcid_show, NULL);
+static DEVICE_ATTR(bcid, S_IRUGO, bcid_show, NULL);
+
 /* Static declaration */
 static struct msm_sensor_ctrl_t *g_sctrl[MAX_CAMERAS];
 
@@ -1339,6 +1359,7 @@ FREE_SENSOR_I2C_CLIENT:
 static int32_t msm_sensor_driver_platform_probe(struct platform_device *pdev)
 {
 	int32_t rc = 0;
+	int err = 0;
 	struct msm_sensor_ctrl_t *s_ctrl = NULL;
 
 	/* Create sensor control structure */
@@ -1376,6 +1397,42 @@ static int32_t msm_sensor_driver_platform_probe(struct platform_device *pdev)
 
 	/* Fill device in power info */
 	s_ctrl->sensordata->power_info.dev = &pdev->dev;
+
+	if (!strncmp(pdev->name, "a0c000.qcom,cci:qcom,camera@0",
+		strlen("a0c000.qcom,cci:qcom,camera@0"))) {
+		err = sysfs_create_file(&pdev->dev.kobj, &dev_attr_bcid.attr);
+		if (err)
+			dev_err(&pdev->dev,
+				"Failed to create REAR sensor sysfs files: %d\n",
+				err);
+
+		memset(g_rear_camera_lot_id, 0,
+			MSM_OTP_REAR_CAMERA_ID_BUFF_SIZE);
+
+		err = msm_get_otp_data(g_rear_camera_lot_id,
+			MSM_OTP_REAR_CAMERA_ID_BUFF_SIZE, OTP_REAR_CAMERA_ID);
+		if (err < 0)
+			pr_err("failed: get rear camera %s : err %d",
+				pdev->name, err);
+	} else if (!strncmp(pdev->name, "a0c000.qcom,cci:qcom,camera@2",
+		strlen("a0c000.qcom,cci:qcom,camera@2"))) {
+		err = sysfs_create_file(&pdev->dev.kobj, &dev_attr_fcid.attr);
+		if (err)
+			dev_err(&pdev->dev,
+				"Failed to create FRONT sensor sysfs files: %d\n",
+				err);
+
+		memset(g_front_camera_lot_id, 0,
+			MSM_OTP_FRONT_CAMERA_ID_BUFF_SIZE);
+
+		err = msm_get_otp_data(g_front_camera_lot_id,
+			MSM_OTP_FRONT_CAMERA_ID_BUFF_SIZE, OTP_FRONT_CAMERA_ID);
+		if (err < 0)
+			pr_err("failed: get front camera %s : otp data err %d",
+				pdev->name, err);
+	} else
+		pr_err("%s:%d failed UNKNOWN DEVICE", __func__, __LINE__);
+
 	return rc;
 FREE_S_CTRL:
 	kfree(s_ctrl);
