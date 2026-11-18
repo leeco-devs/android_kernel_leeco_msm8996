@@ -2497,6 +2497,63 @@ static int dwc3_msm_vbus_reg_set(struct dwc3_msm *mdwc, bool on)
 	return 0;
 }
 
+#if IS_ENABLED(CONFIG_FB_MSM_MDSS_HDMI_MHL_SII6400)
+/*
+ * The Sii6400 MHL bridge, the only caller, keeps VBUS on for the length of an
+ * MHL session. It is a second consumer of the same "vbus_dwc3" supply the OTG
+ * state machine drives, but with its own handle and enable count, so a MHL
+ * session cannot disturb mdwc->vbus_reg_on.  Both ends are built in, so the
+ * build is gated on the bridge rather than on CONFIG_VENDOR_LEECO, which this
+ * file uses for the CC logic: a LeEco build without the bridge would carry
+ * nothing but unused code.
+ */
+static struct device *dwc3_mhl_dev;
+static struct regulator *dwc3_mhl_vbus;
+
+static int dwc3_mhl_vbus_prepare(void)
+{
+	if (dwc3_mhl_vbus)
+		return 0;
+
+	if (!dwc3_mhl_dev)
+		return -ENODEV;
+
+	dwc3_mhl_vbus = devm_regulator_get_optional(dwc3_mhl_dev, "vbus_dwc3");
+	if (IS_ERR(dwc3_mhl_vbus)) {
+		dwc3_mhl_vbus = NULL;
+		return -ENODEV;
+	}
+
+	return 0;
+}
+
+int dwc3_otg_set_mhl_power(bool enable)
+{
+	int ret;
+
+	ret = dwc3_mhl_vbus_prepare();
+	if (ret)
+		return ret;
+
+	if (enable)
+		ret = regulator_enable(dwc3_mhl_vbus);
+	else
+		ret = regulator_disable(dwc3_mhl_vbus);
+
+	if (ret)
+		pr_err("%s: unable to %s MHL VBUS: %d\n", __func__,
+				enable ? "enable" : "disable", ret);
+
+	return ret;
+}
+
+/* Called by the MHL bridge when it switches the port to MHL mode. */
+void dwc3_otg_start_mhl_power(void)
+{
+	dwc3_mhl_vbus_prepare();
+}
+#endif
+
 #ifdef CONFIG_VENDOR_LEECO
 static struct dwc3_msm *_msm_dwc;
 
@@ -3153,6 +3210,9 @@ static int dwc3_msm_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, mdwc);
 	mdwc->dev = &pdev->dev;
+#if IS_ENABLED(CONFIG_FB_MSM_MDSS_HDMI_MHL_SII6400)
+	dwc3_mhl_dev = &pdev->dev;
+#endif
 #ifdef CONFIG_VENDOR_LEECO
 	_msm_dwc = mdwc;
 #endif
@@ -3532,6 +3592,11 @@ static int dwc3_msm_remove(struct platform_device *pdev)
 #ifdef CONFIG_VENDOR_LEECO
 	/* The CC logic must not reach the controller while it is going away. */
 	_msm_dwc = NULL;
+#endif
+#if IS_ENABLED(CONFIG_FB_MSM_MDSS_HDMI_MHL_SII6400)
+	/* The MHL bridge must not reach the regulator once it is released. */
+	dwc3_mhl_dev = NULL;
+	dwc3_mhl_vbus = NULL;
 #endif
 	device_remove_file(&pdev->dev, &dev_attr_mode);
 	device_remove_file(&pdev->dev, &dev_attr_xhci_link_compliance);

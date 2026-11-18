@@ -81,6 +81,7 @@ config FB_MSM_MDSS_HDMI_MHL_SII8334
 
 config FB_MSM_MDSS_HDMI_MHL_SII6400
 	depends on FB_MSM_MDSS_HDMI_PANEL && (QPNP_MHL || COMPILE_TEST)
+	depends on USB_DWC3_QCOM=y
 	bool "MHL/WIHD SII6400 support"
 	default n
 	---help---
