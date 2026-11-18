@@ -1228,6 +1228,7 @@ source "drivers/input/touchscreen/st/Kconfig"
 config TOUCHSCREEN_ATMEL_MXT_LETV
 	tristate "Atmel mXT I2C Touchscreen for the LeTV platform"
 	depends on I2C
+	select TOUCHSCREEN_HIDEEP_TP_LETV
 	help
 	  Say Y here if you have Atmel mXT series I2C touchscreen,
 	  such as mXT640T, connected to your system.
