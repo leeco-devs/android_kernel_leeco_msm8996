@@ -55,6 +55,11 @@
 #define ANC_DETECT_RETRY_CNT 7
 #define WCD_MBHC_SPL_HS_CNT  1
 
+#ifdef CONFIG_VENDOR_LEECO
+/* Set once in wcd_mbhc_init(), used by the Type-C driver to re-detect. */
+static struct wcd_mbhc *g_mbhc;
+#endif
+
 static int det_extn_cable_en;
 module_param(det_extn_cable_en, int,
 		S_IRUGO | S_IWUSR | S_IWGRP);
@@ -1718,6 +1723,24 @@ static irqreturn_t wcd_mbhc_mech_plug_detect_irq(int irq, void *data)
 	return r;
 }
 
+#ifdef CONFIG_VENDOR_LEECO
+int wcd_mbhc_plug_detect(void)
+{
+	if (!g_mbhc)
+		return -ENODEV;
+
+	if (unlikely(!g_mbhc->mbhc_cb->lock_sleep(g_mbhc, true))) {
+		pr_warn("%s: failed to hold suspend\n", __func__);
+		return -EBUSY;
+	}
+
+	wcd_mbhc_swch_irq_handler(g_mbhc);
+	g_mbhc->mbhc_cb->lock_sleep(g_mbhc, false);
+	return 0;
+}
+EXPORT_SYMBOL(wcd_mbhc_plug_detect);
+#endif
+
 static int wcd_mbhc_get_button_mask(struct wcd_mbhc *mbhc)
 {
 	int mask = 0;
@@ -2903,6 +2926,10 @@ int wcd_mbhc_init(struct wcd_mbhc *mbhc, struct snd_soc_codec *codec,
 
 	init_waitqueue_head(&mbhc->wait_btn_press);
 	mutex_init(&mbhc->codec_resource_lock);
+
+#ifdef CONFIG_VENDOR_LEECO
+	g_mbhc = mbhc;
+#endif
 
 	ret = mbhc->mbhc_cb->request_irq(codec, mbhc->intr_ids->mbhc_sw_intr,
 				  wcd_mbhc_mech_plug_detect_irq,
