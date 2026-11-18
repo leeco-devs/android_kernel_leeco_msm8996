@@ -14,9 +14,11 @@
 
 #include <linux/module.h>
 #include <linux/firmware.h>
+#include <linux/pinctrl/consumer.h>
 #include "msm_sd.h"
 #include "msm_ois.h"
 #include "msm_cci.h"
+#include "ois_interface.h"
 
 DEFINE_MSM_MUTEX(msm_ois_mutex);
 /*#define MSM_OIS_DEBUG*/
@@ -339,6 +341,11 @@ static int32_t msm_ois_power_down(struct msm_ois_ctrl_t *o_ctrl)
 	enum msm_sensor_power_seq_gpio_t gpio;
 
 	CDBG("Enter\n");
+
+	if (o_ctrl->project_name)
+		oiscontrol_interface(&o_ctrl->i2c_client,
+			o_ctrl->project_name, OIS_POWERDOWN);
+
 	if (o_ctrl->ois_state != OIS_DISABLE_STATE) {
 
 		rc = msm_ois_vreg_control(o_ctrl, 0);
@@ -430,6 +437,16 @@ static int32_t msm_ois_control(struct msm_ois_ctrl_t *o_ctrl,
 	}
 	o_ctrl->i2c_client.addr_type = MSM_CAMERA_I2C_WORD_ADDR;
 
+	/*
+	 * LeEco HALs put the OIS command in setting_size instead of sending a
+	 * register settings array; the imported library dispatches on it.
+	 */
+	if (o_ctrl->project_name) {
+		rc = oiscontrol_interface(&o_ctrl->i2c_client,
+			o_ctrl->project_name, set_info->ois_params.setting_size);
+		CDBG("Exit\n");
+		return rc;
+	}
 
 	if (set_info->ois_params.setting_size > 0 &&
 		set_info->ois_params.setting_size
@@ -960,6 +977,15 @@ static int32_t msm_ois_platform_probe(struct platform_device *pdev)
 		pr_err("failed rc %d\n", rc);
 		goto release_memory;
 	}
+
+	/*
+	 * LeEco boards name the OIS library to load in qcom,proj-name. Stock
+	 * boards have no such property and keep using the register settings
+	 * interface of msm_ois_control().
+	 */
+	if (of_property_read_string((&pdev->dev)->of_node, "qcom,proj-name",
+		&msm_ois_t->project_name) < 0)
+		msm_ois_t->project_name = NULL;
 
 	if (of_find_property((&pdev->dev)->of_node,
 			"qcom,cam-vreg-name", NULL)) {

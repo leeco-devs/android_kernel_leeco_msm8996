@@ -29,6 +29,7 @@ static int32_t msm_sensor_driver_platform_probe(struct platform_device *pdev);
 
 static uint8_t g_front_camera_lot_id[MSM_OTP_FRONT_CAMERA_ID_BUFF_SIZE];
 static uint8_t g_rear_camera_lot_id[MSM_OTP_REAR_CAMERA_ID_BUFF_SIZE];
+int g_rear_camera_ois;
 
 extern int msm_get_otp_data(uint8_t *, uint32_t, uint16_t);
 
@@ -44,8 +45,34 @@ static ssize_t bcid_show(struct device *dev, struct device_attribute *attr,
 	return snprintf(buf, 17, "%s", g_rear_camera_lot_id);
 }
 
+int msm_get_ois_flag(void)
+{
+	return g_rear_camera_ois;
+}
+
+static ssize_t bois_show(struct device *dev, struct device_attribute *attr,
+				char *buf)
+{
+	return snprintf(buf, PAGE_SIZE, "%d\n", g_rear_camera_ois);
+}
+
+static ssize_t bois_store(struct device *dev, struct device_attribute *attr,
+				const char *buf, size_t size)
+{
+	ssize_t status;
+	long value;
+
+	status = kstrtol(buf, 0, &value);
+	if (status == 0) {
+		g_rear_camera_ois = (int) value;
+		status = size;
+	}
+	return status;
+}
+
 static DEVICE_ATTR(fcid, S_IRUGO, fcid_show, NULL);
 static DEVICE_ATTR(bcid, S_IRUGO, bcid_show, NULL);
+static DEVICE_ATTR(bois, 0644, bois_show, bois_store);
 
 /* Static declaration */
 static struct msm_sensor_ctrl_t *g_sctrl[MAX_CAMERAS];
@@ -1405,6 +1432,13 @@ static int32_t msm_sensor_driver_platform_probe(struct platform_device *pdev)
 			dev_err(&pdev->dev,
 				"Failed to create REAR sensor sysfs files: %d\n",
 				err);
+
+		err = sysfs_create_file(&pdev->dev.kobj, &dev_attr_bois.attr);
+		if (err)
+			dev_err(&pdev->dev,
+				"Failed to create REAR sensor ois sysfs files: %d\n",
+				err);
+		g_rear_camera_ois = 1;
 
 		memset(g_rear_camera_lot_id, 0,
 			MSM_OTP_REAR_CAMERA_ID_BUFF_SIZE);
