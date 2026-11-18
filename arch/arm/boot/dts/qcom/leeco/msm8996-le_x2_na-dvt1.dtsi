@@ -394,6 +394,7 @@
 };
 
 &pmi8994_charger {
+	qcom,usbtemp-vadc = <&pm8994_vadc>;
 	qcom,float-voltage-mv = <4400>;
 	qcom,fastchg-current-ma = <4500>;
 	qcom,thermal-mitigation = <4500 3800 3000 2000 500>;

@@ -1420,6 +1420,53 @@ static enum power_supply_property smb1351_parallel_properties[] = {
 	POWER_SUPPLY_PROP_MODEL_NAME,
 };
 
+#ifdef CONFIG_VENDOR_LEECO
+/* Keep the parallel path off until the main charger has safe split voting. */
+static int smb1351_parallel_force_off(struct smb1351_charger *chip)
+{
+	int rc, first_error = 0;
+	u8 reg;
+
+	rc = smb1351_masked_write(chip, CMD_CHG_REG, CMD_CHG_EN_BIT,
+			CMD_CHG_DISABLE);
+	if (rc && !first_error)
+		first_error = rc;
+	rc = smb1351_usb_suspend(chip, CURRENT, true);
+	if (rc && !first_error)
+		first_error = rc;
+	rc = smb1351_enable_volatile_writes(chip);
+	if (rc && !first_error)
+		first_error = rc;
+	rc = smb1351_masked_write(chip, CHG_PIN_EN_CTRL_REG,
+			EN_PIN_CTRL_MASK, EN_BY_I2C_0_DISABLE);
+	if (rc && !first_error)
+		first_error = rc;
+	rc = smb1351_masked_write(chip, VARIOUS_FUNC_REG,
+			SUSPEND_MODE_CTRL_BIT, SUSPEND_MODE_CTRL_BY_I2C);
+	if (rc && !first_error)
+		first_error = rc;
+	if (first_error)
+		return first_error;
+
+	rc = smb1351_read_reg(chip, CMD_CHG_REG, &reg);
+	if (rc || (reg & CMD_CHG_EN_BIT))
+		return rc ? rc : -EIO;
+	rc = smb1351_read_reg(chip, CMD_INPUT_LIMIT_REG, &reg);
+	if (rc || !(reg & CMD_SUSPEND_MODE_BIT))
+		return rc ? rc : -EIO;
+	rc = smb1351_read_reg(chip, CHG_PIN_EN_CTRL_REG, &reg);
+	if (rc || (reg & EN_PIN_CTRL_MASK) != EN_BY_I2C_0_DISABLE)
+		return rc ? rc : -EIO;
+	rc = smb1351_read_reg(chip, VARIOUS_FUNC_REG, &reg);
+	if (rc || !(reg & SUSPEND_MODE_CTRL_BIT))
+		return rc ? rc : -EIO;
+
+	chip->parallel_charger_suspended = true;
+	chip->usb_psy_ma = SUSPEND_CURRENT_MA;
+	return 0;
+}
+#endif
+
 static int smb1351_parallel_set_chg_suspend(struct smb1351_charger *chip,
 						int suspend)
 {
@@ -1601,6 +1648,15 @@ static int smb1351_parallel_set_property(struct power_supply *psy,
 	int rc = 0, index, current_ma;
 	struct smb1351_charger *chip = power_supply_get_drvdata(psy);
 
+#ifdef CONFIG_VENDOR_LEECO
+	if (prop == POWER_SUPPLY_PROP_INPUT_SUSPEND ||
+	    prop == POWER_SUPPLY_PROP_CHARGING_ENABLED) {
+		if ((prop == POWER_SUPPLY_PROP_INPUT_SUSPEND && !val->intval) ||
+		    (prop == POWER_SUPPLY_PROP_CHARGING_ENABLED && val->intval))
+			return -EPERM;
+		return smb1351_parallel_force_off(chip);
+	}
+#endif
 	switch (prop) {
 	case POWER_SUPPLY_PROP_CHARGING_ENABLED:
 		/*
@@ -3183,7 +3239,9 @@ static int smb1351_parallel_charger_probe(struct i2c_client *client,
 	chip->client = client;
 	chip->dev = &client->dev;
 	chip->parallel_charger = true;
+#ifndef CONFIG_VENDOR_LEECO
 	chip->parallel_charger_suspended = true;
+#endif
 
 	chip->usb_suspended_status = of_property_read_bool(node,
 					"qcom,charging-disabled");
@@ -3213,6 +3271,14 @@ static int smb1351_parallel_charger_probe(struct i2c_client *client,
 
 	i2c_set_clientdata(client, chip);
 
+#ifdef CONFIG_VENDOR_LEECO
+	/* Never publish a safe state until the hardware accepted it. */
+	rc = smb1351_parallel_force_off(chip);
+	if (rc) {
+		dev_err(chip->dev, "Failed to disable parallel charger: %d\n", rc);
+		return rc;
+	}
+#endif
 	chip->parallel_psy_d.name = "parallel";
 	chip->parallel_psy_d.type = POWER_SUPPLY_TYPE_PARALLEL;
 	chip->parallel_psy_d.get_property = smb1351_parallel_get_property;
@@ -3231,7 +3297,7 @@ static int smb1351_parallel_charger_probe(struct i2c_client *client,
 	if (IS_ERR(chip->parallel_psy)) {
 		pr_err("Couldn't register parallel psy rc=%ld\n",
 				PTR_ERR(chip->parallel_psy));
-		return rc;
+		return PTR_ERR(chip->parallel_psy);
 	}
 
 	chip->resume_completed = true;
@@ -3268,6 +3334,13 @@ static void smb1351_charger_shutdown(struct i2c_client *client)
 {
 	struct smb1351_charger *chip = i2c_get_clientdata(client);
 
+#ifdef CONFIG_VENDOR_LEECO
+	if (chip->parallel_charger) {
+		if (smb1351_parallel_force_off(chip))
+			dev_err(chip->dev, "Failed to disable parallel charger on shutdown\n");
+		return;
+	}
+#endif
 	if (!chip->parallel_charger_suspended)
 		smb1351_usb_suspend(chip, USER, true);
 }

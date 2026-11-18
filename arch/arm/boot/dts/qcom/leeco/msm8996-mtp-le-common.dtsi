@@ -517,6 +517,8 @@
 };
 
 &pmi8994_charger {
+	qcom,le-parallel-psy = <&le_parallel_charger>;
+	qcom,usbin-vadc = <&pmi8994_vadc>;
 	qcom,dc-psy-type = "Wipower";
 	qcom,dcin-vadc = <&pmi8994_vadc>;
 	qcom,wipower-default-ilim-map = <4000000 20000000 550 700 300>;
@@ -538,13 +540,17 @@
 };
 
 &i2c_7 {
-	smb1351-charger@1d {
+	le_parallel_charger: smb1351-charger@1d {
 		compatible = "qcom,smb1351-charger";
 		reg = <0x1d>;
 		qcom,parallel-charger;
 		qcom,float-voltage-mv = <4400>;
 		qcom,recharge-mv = <100>;
 	};
+};
+
+&usb3 {
+	extcon = <&pmi8994_charger>;
 };
 
 &usb_otg_switch {

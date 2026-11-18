@@ -21,6 +21,7 @@
 #include <linux/err.h>
 #include <linux/debugfs.h>
 #include <linux/slab.h>
+#include <linux/sizes.h>
 #include <linux/uaccess.h>
 #include <linux/init.h>
 #include <linux/spmi.h>
@@ -37,6 +38,11 @@
 #include <linux/string_helpers.h>
 #include <linux/alarmtimer.h>
 #include <linux/qpnp/qpnp-revid.h>
+
+#ifdef CONFIG_PRODUCT_LE_ZL1
+#include <linux/reboot.h>
+static int empty_cn = 0;
+#endif
 
 /* Register offsets */
 
@@ -332,7 +338,11 @@ module_param_named(
 	battery_type, fg_batt_type, charp, 00600
 );
 
+#ifdef CONFIG_VENDOR_LEECO
+static int fg_sram_update_period_ms = 10000;
+#else
 static int fg_sram_update_period_ms = 30000;
+#endif
 module_param_named(
 	sram_update_period_ms, fg_sram_update_period_ms, int, 00600
 );
@@ -2023,7 +2033,12 @@ static void fg_handle_battery_insertion(struct fg_chip *chip)
 
 static int soc_to_setpoint(int soc)
 {
+#ifdef CONFIG_VENDOR_LEECO
+	/* Return the original SoC delta. */
+	return soc;
+#else
 	return DIV_ROUND_CLOSEST(soc * 255, 100);
+#endif
 }
 
 static void batt_to_setpoint_adc(int vbatt_mv, u8 *data)
@@ -2233,7 +2248,11 @@ static int get_monotonic_soc_raw(struct fg_chip *chip)
 }
 
 #define EMPTY_CAPACITY		0
+#ifdef CONFIG_VENDOR_LEECO
+#define DEFAULT_CAPACITY	-1 /* Negative value if no profile is loaded. */
+#else
 #define DEFAULT_CAPACITY	50
+#endif
 #define MISSING_CAPACITY	100
 #define FULL_CAPACITY		100
 #define FULL_SOC_RAW		0xFF
@@ -2697,6 +2716,43 @@ resched:
 out:
 	fg_relax(&chip->sanity_wakeup_source);
 }
+
+#ifdef CONFIG_VENDOR_LEECO
+/* Read the requested sample directly instead of racing the periodic work. */
+static int get_real_time_prop_value(struct fg_chip *chip, unsigned int type,
+		int *value)
+{
+	u8 data[2];
+	u16 raw;
+	int rc;
+
+	if (READ_ONCE(chip->fg_restarting) || READ_ONCE(chip->fg_shutdown))
+		return -EBUSY;
+	/*
+	 * SRAM access takes mutexes and may sleep, so it cannot be used from an
+	 * atomic context (charger IRQ handlers read CURRENT_NOW). Return the
+	 * last sampled value there, which is what the generic path always did.
+	 */
+	if (in_atomic() || irqs_disabled()) {
+		*value = get_sram_prop_now(chip, type);
+		return 0;
+	}
+	rc = fg_mem_read(chip, data, fg_data[type].address,
+			fg_data[type].len, fg_data[type].offset, false);
+	if (rc)
+		return rc;
+	if (READ_ONCE(chip->fg_restarting) || READ_ONCE(chip->fg_shutdown))
+		return -EBUSY;
+	raw = data[0] | (data[1] << 8);
+	if (type == FG_DATA_CURRENT)
+		*value = div_s64((s64)(s16)raw * LSB_16B_NUMRTR,
+				LSB_16B_DENMTR);
+	else
+		*value = div_u64((u64)raw * LSB_16B_NUMRTR,
+				LSB_16B_DENMTR);
+	return 0;
+}
+#endif
 
 #define SRAM_TIMEOUT_MS			3000
 static void update_sram_data_work(struct work_struct *work)
@@ -4583,10 +4639,20 @@ static int fg_power_get_property(struct power_supply *psy,
 		val->intval = get_sram_prop_now(chip, FG_DATA_VINT_ERR);
 		break;
 	case POWER_SUPPLY_PROP_CURRENT_NOW:
+#ifdef CONFIG_VENDOR_LEECO
+		return get_real_time_prop_value(chip, FG_DATA_CURRENT,
+				&val->intval);
+#else
 		val->intval = get_sram_prop_now(chip, FG_DATA_CURRENT);
+#endif
 		break;
 	case POWER_SUPPLY_PROP_VOLTAGE_NOW:
+#ifdef CONFIG_VENDOR_LEECO
+		return get_real_time_prop_value(chip, FG_DATA_VOLTAGE,
+				&val->intval);
+#else
 		val->intval = get_sram_prop_now(chip, FG_DATA_VOLTAGE);
+#endif
 		break;
 	case POWER_SUPPLY_PROP_VOLTAGE_OCV:
 		val->intval = get_sram_prop_now(chip, FG_DATA_OCV);
@@ -6636,6 +6702,21 @@ static void check_empty_work(struct work_struct *work)
 		if (chip->power_supply_registered)
 			power_supply_changed(chip->bms_psy);
 	}
+
+#ifdef CONFIG_PRODUCT_LE_ZL1
+	if (empty_cn > 40) {
+		pr_err("low voltage, forcing shutdown immediately\n");
+		orderly_poweroff(true);
+	}
+
+	if (chip->soc_empty) {
+		empty_cn++;
+		queue_delayed_work(system_power_efficient_wq,
+			&chip->check_empty_work, msecs_to_jiffies(FG_EMPTY_DEBOUNCE_MS));
+	} else {
+		empty_cn = 0;
+	}
+#endif
 
 out:
 	fg_relax(&chip->empty_check_wakeup_source);

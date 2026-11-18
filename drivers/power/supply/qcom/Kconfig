@@ -100,4 +100,15 @@ config QPNP_QNOVO
 	  module. It also allows userspace code to read diagnostics of voltage
 	  and current measured during certain phases of the pulses.
 
+config QPNP_MHL
+	bool "LeTV MHL state information"
+	default y if PRODUCT_LE_X2
+	depends on QPNP_SMBCHARGER
+	help
+	  Say Y here to enable LeTV's MHL state information. The charger only
+	  reports MHL when its node sets qcom,mhl-wihd, which the zl1-evt and
+	  max_plus boards do but the shipped zl1 boards do not, so enable this
+	  there if those boards need MHL. The lineage zl1 defconfig keeps it
+	  off.
+
 endmenu

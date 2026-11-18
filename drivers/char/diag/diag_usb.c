@@ -458,6 +458,11 @@ static int diag_usb_write_ext(struct diag_usb_info *usb_info,
 			return -ENOMEM;
 		}
 
+		/*
+		 * The imported LeEco source re-takes write_lock here, but this whole
+		 * loop already runs under it: taking it again would deadlock and
+		 * release the outer lock early.
+		 */
 		diag_ws_on_read(DIAG_WS_MUX, len);
 		err = usb_diag_write(usb_info->hdl, req);
 		diag_ws_on_copy(DIAG_WS_MUX);
