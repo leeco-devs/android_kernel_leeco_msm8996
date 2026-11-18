@@ -1168,6 +1168,8 @@ typedef enum
 
 struct max98927_priv {
 	struct device *dev;
+	/* Device the codec was registered against, i.e. the second amp. */
+	char codec_name[32];
 	struct regmap *regmap_l;
 	struct regmap *regmap_r;
 	struct regmap *regmap;

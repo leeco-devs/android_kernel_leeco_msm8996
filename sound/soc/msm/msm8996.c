@@ -645,7 +645,7 @@ module_param_call(usb_typec_swap, usb_typec_swap_parm_set,
 #endif
 
 #if defined(CONFIG_SND_SOC_MAX98927) && defined(CONFIG_VENDOR_LEECO)
-extern int max98927_get_i2c_states(void);
+extern const char *max98927_get_codec_name(void);
 #endif
 
 static inline int param_is_mask(int p)
@@ -9060,6 +9060,37 @@ static struct snd_soc_dai_link msm8996_smartpa_dai_link[] = {
 #endif
 
 #if defined(CONFIG_SND_SOC_MAX98927) && defined(CONFIG_VENDOR_LEECO)
+/* Filled in from the codec driver before the links are installed. */
+static char msm8996_max98927_codec_name[32];
+
+/*
+ * How long the card waits for the codec before it settles for the stub
+ * links.  The amps only drive the speaker, so one that never registers must
+ * not keep the headset and the mics from coming up for the whole boot.
+ */
+#define MSM8996_MAX98927_GRACE_MS 5000
+
+static struct platform_device *msm8996_max98927_pdev;
+static bool msm8996_max98927_gave_up;
+
+static void msm8996_max98927_giveup(struct work_struct *work)
+{
+	struct platform_device *pdev = msm8996_max98927_pdev;
+
+	if (!pdev || platform_get_drvdata(pdev))
+		return;
+	if (max98927_get_codec_name())
+		return;
+
+	dev_warn(&pdev->dev,
+		 "MAX98927 did not register, using the stub dailinks\n");
+	msm8996_max98927_gave_up = true;
+	device_attach(&pdev->dev);
+}
+
+static DECLARE_DELAYED_WORK(msm8996_max98927_giveup_work,
+			    msm8996_max98927_giveup);
+
 static struct snd_soc_dai_link msm8996_max98927_dai_link[] = {
 	/* MAX98927 SmartPA BACK END DAI Link */
 	{
@@ -9067,7 +9098,6 @@ static struct snd_soc_dai_link msm8996_max98927_dai_link[] = {
 		.stream_name = "Tertiary MI2S Playback",
 		.cpu_dai_name = "msm-dai-q6-mi2s.2",
 		.platform_name = "msm-pcm-routing",
-		.codec_name = "max98927.9-003a",
 		.codec_dai_name = "max98927-aif1",
 		.no_pcm = 1,
 		.dpcm_playback = 1,
@@ -9081,7 +9111,6 @@ static struct snd_soc_dai_link msm8996_max98927_dai_link[] = {
 		.stream_name = "Tertiary MI2S Capture",
 		.cpu_dai_name = "msm-dai-q6-mi2s.2",
 		.platform_name = "msm-pcm-routing",
-		.codec_name = "max98927.9-003a",
 		.codec_dai_name = "max98927-aif1",
 		.no_pcm = 1,
 		.dpcm_capture = 1,
@@ -9381,23 +9410,42 @@ static struct snd_soc_card *populate_snd_card_dailinks(struct device *dev)
 #if defined(CONFIG_SND_SOC_MAX98927) && defined(CONFIG_VENDOR_LEECO)
 	if (of_property_read_bool(dev->of_node,
 				  "letv,smartpa-audio-max98927")) {
+		const char *codec = max98927_get_codec_name();
 		int i;
 
-		pr_info("%s(): MAX98927 SmartPA support is present\n", __func__);
-		for (i = 0; i < len_5; i++) {
-			if (dailink[i].be_id != MSM_BACKEND_DAI_TERTIARY_MI2S_RX &&
-			    dailink[i].be_id != MSM_BACKEND_DAI_TERTIARY_MI2S_TX)
-				continue;
-			if (strcmp(dailink[i].cpu_dai_name, "msm-dai-q6-mi2s.2") ||
-			    max98927_get_i2c_states())
-				continue;
+		/*
+		 * The codec is registered from whichever of the two amp nodes
+		 * probes second, so ask it for the name its component ended up
+		 * with instead of spelling one out here.
+		 */
+		if (!codec) {
+			pr_info("%s(): MAX98927 codec missing, keeping the stub links\n",
+				__func__);
+		} else {
+			strlcpy(msm8996_max98927_codec_name, codec,
+				sizeof(msm8996_max98927_codec_name));
+			pr_info("%s(): MAX98927 SmartPA support is present\n",
+				__func__);
 
-			pr_info("%s: matching %s\n", __func__,
-				dailink[i].cpu_dai_name);
-			dailink[i] =
-				msm8996_max98927_dai_link[
+			for (i = 0; i < len_5; i++) {
+				const char *cpu = dailink[i].cpu_dai_name;
+
+				if (dailink[i].be_id !=
+				    MSM_BACKEND_DAI_TERTIARY_MI2S_RX &&
+				    dailink[i].be_id !=
+				    MSM_BACKEND_DAI_TERTIARY_MI2S_TX)
+					continue;
+				if (strcmp(cpu, "msm-dai-q6-mi2s.2"))
+					continue;
+
+				pr_info("%s: matching %s\n", __func__, cpu);
+				dailink[i] =
+					msm8996_max98927_dai_link[
 					dailink[i].be_id ==
 					MSM_BACKEND_DAI_TERTIARY_MI2S_RX ? 0 : 1];
+				dailink[i].codec_name =
+					msm8996_max98927_codec_name;
+			}
 		}
 	} else {
 		pr_info("%s(): MAX98927 SmartPA support is NOT present\n",
@@ -9596,6 +9644,37 @@ static int msm8996_asoc_machine_probe(struct platform_device *pdev)
 		dev_err(&pdev->dev, "No platform supplied from device tree\n");
 		return -EINVAL;
 	}
+
+#if defined(CONFIG_SND_SOC_MAX98927) && defined(CONFIG_VENDOR_LEECO)
+	/*
+	 * Both amps have to have probed before the codec exists, and they can
+	 * come after this card, so wait for it and build the dailinks around it
+	 * rather than silently keeping the stub ones.
+	 *
+	 * The wait is bounded: the amps only drive the speaker, so one that
+	 * never registers must not keep the rest of the card from coming up.
+	 * msm8996_max98927_giveup() re-runs this probe without the codec and
+	 * leaves the stub links in place.
+	 */
+	if (of_property_read_bool(pdev->dev.of_node,
+				  "letv,smartpa-audio-max98927") &&
+	    !max98927_get_codec_name() && !msm8996_max98927_gave_up) {
+		unsigned long delay;
+
+		dev_info(&pdev->dev,
+			 "%s: MAX98927 codec not registered, deferring\n",
+			 __func__);
+		msm8996_max98927_pdev = pdev;
+		/*
+		 * One grace period from the first deferral; the deferred-probe
+		 * retries in between find the timer already armed.
+		 */
+		delay = msecs_to_jiffies(MSM8996_MAX98927_GRACE_MS);
+		schedule_delayed_work(&msm8996_max98927_giveup_work, delay);
+		return -EPROBE_DEFER;
+	}
+	cancel_delayed_work(&msm8996_max98927_giveup_work);
+#endif
 
 	pdata = devm_kzalloc(&pdev->dev,
 			sizeof(struct msm8996_asoc_mach_data), GFP_KERNEL);
