@@ -292,3 +292,23 @@ config USB_QCOM_DIAG_BRIDGE
 	  driver.
 	  To compile this driver as a module, choose M here: the
 	  module will be called diag_bridge.  If unsure, choose N.
+
+config USB_CCLOGIC
+	bool "LeEco Type-C CC logic helpers"
+	depends on VENDOR_LEECO
+	help
+	  Shared CC-logic state used by the LeEco Type-C controller drivers.
+
+config USB_CCLOGIC_TUSB302L
+	bool "USB CC logic TUSB302L"
+	depends on VENDOR_LEECO
+	select USB_CCLOGIC
+	help
+	  Say Y here for the TI TUSB302L Type-C controller.
+
+config USB_CCLOGIC_PI5USB
+	bool "USB CC logic PI5USB30216A"
+	depends on VENDOR_LEECO
+	select USB_CCLOGIC
+	help
+	  Say Y here for the Pericom PI5USB30216A Type-C controller.

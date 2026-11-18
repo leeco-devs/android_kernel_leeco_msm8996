@@ -237,7 +237,12 @@ struct dwc3_msm {
 	bool			in_device_mode;
 	enum usb_device_speed	max_rh_port_speed;
 	unsigned int		tx_fifo_size;
-	bool			vbus_active;
+		bool				vbus_active;
+	bool				vbus_reg_on;
+#ifdef CONFIG_VENDOR_LEECO
+	/* VBUS is switched by the LeEco CC-logic driver instead. */
+	bool				vbus_set_by_cclogic;
+#endif
 	bool			suspend;
 	bool			disable_host_mode_pm;
 	enum dwc3_id_state	id_state;
@@ -2458,6 +2463,83 @@ static void dwc3_resume_work(struct work_struct *w)
 	dwc3_ext_event_notify(mdwc);
 }
 
+/*
+ * Single writer for the VBUS regulator: the ID/VBUS handling and the LeEco
+ * CC logic both come through here, so vbus_reg_on cannot drift from the
+ * regulator's actual enable count.
+ */
+static int dwc3_msm_vbus_reg_set(struct dwc3_msm *mdwc, bool on)
+{
+	int ret;
+
+	if (IS_ERR_OR_NULL(mdwc->vbus_reg))
+		return 0;
+
+	if (on == mdwc->vbus_reg_on)
+		return 0;
+
+	if (on) {
+		ret = regulator_enable(mdwc->vbus_reg);
+		if (ret) {
+			dev_err(mdwc->dev, "unable to enable vbus_reg\n");
+			return ret;
+		}
+	} else {
+		ret = regulator_disable(mdwc->vbus_reg);
+		if (ret) {
+			dev_err(mdwc->dev, "unable to disable vbus_reg\n");
+			return ret;
+		}
+	}
+
+	mdwc->vbus_reg_on = on;
+
+	return 0;
+}
+
+#ifdef CONFIG_VENDOR_LEECO
+static struct dwc3_msm *_msm_dwc;
+
+/* Called by the LeEco CC-logic drivers; ext_call marks their own requests. */
+int msm_usb_vbus_set(void *_mdwc, bool on, bool ext_call)
+{
+	struct dwc3_msm *mdwc = _mdwc ? _mdwc : _msm_dwc;
+
+	if (!mdwc)
+		return -ENODEV;
+	/* Only the side that owns VBUS control may change it. */
+	if (ext_call != mdwc->vbus_set_by_cclogic)
+		return 0;
+
+	return dwc3_msm_vbus_reg_set(mdwc, on);
+}
+EXPORT_SYMBOL(msm_usb_vbus_set);
+
+int pi5usb_set_msm_usb_host_mode(bool mode)
+{
+	struct dwc3_msm *mdwc = _msm_dwc;
+	struct dwc3 *dwc;
+
+	if (!mdwc)
+		return -ENODEV;
+	dwc = platform_get_drvdata(mdwc->dwc3);
+	if (!dwc)
+		return -ENODEV;
+
+	dev_info(mdwc->dev, "%s = %s_mode\n", __func__,
+			mode ? "host" : "device");
+	mdwc->id_state = mode ? DWC3_ID_GROUND : DWC3_ID_FLOAT;
+
+	if (atomic_read(&dwc->in_lpm))
+		dwc3_resume_work(&mdwc->resume_work);
+	else
+		dwc3_ext_event_notify(mdwc);
+
+	return 0;
+}
+EXPORT_SYMBOL(pi5usb_set_msm_usb_host_mode);
+#endif
+
 static void dwc3_pwr_event_handler(struct dwc3_msm *mdwc)
 {
 	struct dwc3 *dwc = platform_get_drvdata(mdwc->dwc3);
@@ -3071,6 +3153,9 @@ static int dwc3_msm_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, mdwc);
 	mdwc->dev = &pdev->dev;
+#ifdef CONFIG_VENDOR_LEECO
+	_msm_dwc = mdwc;
+#endif
 
 	INIT_LIST_HEAD(&mdwc->req_complete_list);
 	INIT_WORK(&mdwc->resume_work, dwc3_resume_work);
@@ -3286,6 +3371,10 @@ static int dwc3_msm_probe(struct platform_device *pdev)
 
 	mdwc->no_wakeup_src_in_hostmode = of_property_read_bool(node,
 				"qcom,no-wakeup-src-in-hostmode");
+#ifdef CONFIG_VENDOR_LEECO
+	mdwc->vbus_set_by_cclogic = of_property_read_bool(node,
+				"qcom,vbus_set_by_cclogic");
+#endif
 	if (mdwc->no_wakeup_src_in_hostmode)
 		dev_dbg(&pdev->dev, "dwc3 host not using wakeup source\n");
 
@@ -3440,6 +3529,10 @@ static int dwc3_msm_remove(struct platform_device *pdev)
 	struct dwc3_msm	*mdwc = platform_get_drvdata(pdev);
 	int ret_pm;
 
+#ifdef CONFIG_VENDOR_LEECO
+	/* The CC logic must not reach the controller while it is going away. */
+	_msm_dwc = NULL;
+#endif
 	device_remove_file(&pdev->dev, &dev_attr_mode);
 	device_remove_file(&pdev->dev, &dev_attr_xhci_link_compliance);
 	device_create_file(&pdev->dev, &dev_attr_usb_data_enabled);
@@ -3484,8 +3577,7 @@ static int dwc3_msm_remove(struct platform_device *pdev)
 	if (mdwc->bus_perf_client)
 		msm_bus_scale_unregister_client(mdwc->bus_perf_client);
 
-	if (!IS_ERR_OR_NULL(mdwc->vbus_reg))
-		regulator_disable(mdwc->vbus_reg);
+	dwc3_msm_vbus_reg_set(mdwc, false);
 
 	disable_irq(mdwc->hs_phy_irq);
 	if (mdwc->ss_phy_irq)
@@ -3671,10 +3763,8 @@ static int dwc3_otg_start_host(struct dwc3_msm *mdwc, int on)
 		usb_phy_notify_connect(mdwc->hs_phy, USB_SPEED_HIGH);
 		dbg_event(0xFF, "StrtHost gync",
 			atomic_read(&mdwc->dev->power.usage_count));
-		if (!IS_ERR(mdwc->vbus_reg))
-			ret = regulator_enable(mdwc->vbus_reg);
+		ret = dwc3_msm_vbus_reg_set(mdwc, true);
 		if (ret) {
-			dev_err(mdwc->dev, "unable to enable vbus_reg\n");
 			mdwc->hs_phy->flags &= ~PHY_HOST_MODE;
 			mdwc->ss_phy->flags &= ~PHY_HOST_MODE;
 			pm_runtime_put_sync(mdwc->dev);
@@ -3703,8 +3793,7 @@ static int dwc3_otg_start_host(struct dwc3_msm *mdwc, int on)
 			dev_err(mdwc->dev,
 				"%s: failed to add XHCI pdev ret=%d\n",
 				__func__, ret);
-			if (!IS_ERR(mdwc->vbus_reg))
-				regulator_disable(mdwc->vbus_reg);
+			dwc3_msm_vbus_reg_set(mdwc, false);
 			mdwc->hs_phy->flags &= ~PHY_HOST_MODE;
 			mdwc->ss_phy->flags &= ~PHY_HOST_MODE;
 			pm_runtime_put_sync(mdwc->dev);
@@ -3763,12 +3852,9 @@ static int dwc3_otg_start_host(struct dwc3_msm *mdwc, int on)
 		dev_dbg(mdwc->dev, "%s: turn off host\n", __func__);
 
 		usb_unregister_atomic_notify(&mdwc->usbdev_nb);
-		if (!IS_ERR(mdwc->vbus_reg))
-			ret = regulator_disable(mdwc->vbus_reg);
-		if (ret) {
-			dev_err(mdwc->dev, "unable to disable vbus_reg\n");
+		ret = dwc3_msm_vbus_reg_set(mdwc, false);
+		if (ret)
 			return ret;
-		}
 
 		cancel_delayed_work_sync(&mdwc->perf_vote_work);
 		msm_dwc3_perf_vote_update(mdwc, false);
