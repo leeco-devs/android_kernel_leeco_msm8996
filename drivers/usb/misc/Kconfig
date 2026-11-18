@@ -147,6 +147,7 @@ config USB_APPLEDISPLAY
 	  Displays over USB. This driver provides a sysfs interface.
 
 source "drivers/usb/misc/sisusbvga/Kconfig"
+source "drivers/usb/misc/anx7418/Kconfig"
 
 config USB_LD
 	tristate "USB LD driver"
@@ -315,6 +316,14 @@ config USB_CCLOGIC_PI5USB
 	select USB_CCLOGIC
 	help
 	  Say Y here for the Pericom PI5USB30216A Type-C controller.
+
+config USB_CCLOGIC_TUSB320
+	bool "USB CC logic TUSB320"
+	depends on VENDOR_LEECO
+	default y
+	select USB_CCLOGIC
+	help
+	  Say Y here for the TI TUSB320 Type-C controller.
 
 config USB_CYCCG
 	bool "Cypress USB Type-C and PD Controller"

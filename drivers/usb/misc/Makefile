@@ -34,4 +34,6 @@ obj-$(CONFIG_USB_QCOM_DIAG_BRIDGE)	+= diag_ipc_bridge.o
 obj-$(CONFIG_USB_CCLOGIC)		+= cclogic.o
 obj-$(CONFIG_USB_CCLOGIC_TUSB302L)	+= tusb302l.o
 obj-$(CONFIG_USB_CCLOGIC_PI5USB)	+= pi5usb30216a.o
+obj-$(CONFIG_USB_CCLOGIC_TUSB320)	+= tusb320.o
 obj-$(CONFIG_USB_CYCCG)		+= cyccg.o
+obj-$(CONFIG_ANALOGIX_OHIO)		+= anx7418/

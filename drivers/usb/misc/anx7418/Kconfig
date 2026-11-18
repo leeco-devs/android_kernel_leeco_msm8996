@@ -1,0 +1,8 @@
+config ANALOGIX_OHIO
+	tristate "Analogix Type-C interface support"
+	depends on VENDOR_LEECO
+	default y
+	help
+	  The Analogix ANX7418 is the Type-C port controller on the LeEco x2
+	  evt and dvt1 boards, advertised as "analogix,ohio".  It handles CC
+	  detection and hands the port over to the DisplayPort and MHL path.
