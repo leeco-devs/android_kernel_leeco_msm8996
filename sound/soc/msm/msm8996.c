@@ -9076,6 +9076,7 @@ static bool msm8996_max98927_gave_up;
 static void msm8996_max98927_giveup(struct work_struct *work)
 {
 	struct platform_device *pdev = msm8996_max98927_pdev;
+	int ret;
 
 	if (!pdev || platform_get_drvdata(pdev))
 		return;
@@ -9085,7 +9086,8 @@ static void msm8996_max98927_giveup(struct work_struct *work)
 	dev_warn(&pdev->dev,
 		 "MAX98927 did not register, using the stub dailinks\n");
 	msm8996_max98927_gave_up = true;
-	device_attach(&pdev->dev);
+	ret = device_attach(&pdev->dev);
+	dev_dbg(&pdev->dev, "MAX98927 card re-probe returned %d\n", ret);
 }
 
 static DECLARE_DELAYED_WORK(msm8996_max98927_giveup_work,
