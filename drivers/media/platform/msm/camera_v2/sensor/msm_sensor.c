@@ -24,6 +24,8 @@
 static struct msm_camera_i2c_fn_t msm_sensor_cci_func_tbl;
 static struct msm_camera_i2c_fn_t msm_sensor_secure_func_tbl;
 
+extern int msm_get_otp_data(uint8_t *, uint32_t, uint16_t);
+
 static void msm_sensor_adjust_mclk(struct msm_camera_power_ctrl_t *ctrl)
 {
 	int idx;
@@ -236,6 +238,31 @@ static uint16_t msm_sensor_id_by_mask(struct msm_sensor_ctrl_t *s_ctrl,
 	return sensor_id;
 }
 
+/*
+ * The Letv boards keep the expected module and VCM ids in the camera OTP.
+ * Every OTP flag used here is four bytes long, so the id sits at @offset of
+ * a four byte read. A HAL that asks for a non-zero id is a Letv one and
+ * fails the probe when the OTP cannot confirm it; when it asks for 0 and no
+ * Letv eeprom data has been read, the check does not apply.
+ */
+static bool msm_sensor_otp_id_matches(uint16_t data_flag, uint8_t offset,
+	uint8_t expected)
+{
+	uint8_t otp_buf[MSM_OTP_REAR_CAMERA_MODULE_ID_BUFF_SIZE];
+	int rc;
+
+	rc = msm_get_otp_data(otp_buf, sizeof(otp_buf), data_flag);
+	if (rc < 0) {
+		pr_err("%s: flag %d: no OTP id available (%d)\n", __func__,
+			data_flag, rc);
+		return !expected;
+	}
+
+	pr_err("%s: flag %d: OTP id 0x%x, expected 0x%x\n", __func__, data_flag,
+		otp_buf[offset], expected);
+	return otp_buf[offset] == expected;
+}
+
 int msm_sensor_match_id(struct msm_sensor_ctrl_t *s_ctrl)
 {
 	int rc = 0;
@@ -275,6 +302,20 @@ int msm_sensor_match_id(struct msm_sensor_ctrl_t *s_ctrl)
 				__func__, chipid, slave_info->sensor_id);
 		return -ENODEV;
 	}
+
+	if (slave_info->camera_id == CAMERA_0) {
+		if (!msm_sensor_otp_id_matches(OTP_REAR_CAMERA_MODULE_ID, 0,
+				slave_info->module_id))
+			return -ENODEV;
+		/* The zl1 also pins the VCM to the camera module */
+		if (!msm_sensor_otp_id_matches(OTP_REAR_CAMERA_VCM_ID, 3,
+				slave_info->vcm_id))
+			return -ENODEV;
+	} else if (!msm_sensor_otp_id_matches(OTP_FRONT_CAMERA_MODULE_ID, 0,
+			slave_info->module_id)) {
+		return -ENODEV;
+	}
+
 	return rc;
 }
 

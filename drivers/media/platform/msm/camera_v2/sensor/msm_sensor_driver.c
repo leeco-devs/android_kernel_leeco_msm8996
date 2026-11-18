@@ -994,6 +994,9 @@ int32_t msm_sensor_driver_probe(void *setting,
 		slave_info->sensor_id_info.sensor_id_reg_addr;
 	camera_info->sensor_id = slave_info->sensor_id_info.sensor_id;
 	camera_info->sensor_id_mask = slave_info->sensor_id_info.sensor_id_mask;
+	camera_info->camera_id = slave_info->camera_id;
+	camera_info->module_id = slave_info->sensor_id_info.module_id;
+	camera_info->vcm_id = slave_info->sensor_id_info.vcm_id;
 
 	/* Fill CCI master, slave address and CCI default params */
 	if (!s_ctrl->sensor_i2c_client) {
