@@ -315,3 +315,13 @@ config USB_CCLOGIC_PI5USB
 	select USB_CCLOGIC
 	help
 	  Say Y here for the Pericom PI5USB30216A Type-C controller.
+
+config USB_CYCCG
+	bool "Cypress USB Type-C and PD Controller"
+	depends on VENDOR_LEECO
+	depends on I2C
+	default y
+	help
+	  This driver adds support for the Cypress USB Type-C and PD Controller
+	  used on the LeEco x2 boards.  It exposes the CCG firmware register map
+	  to user space and drives the LeEco PD contract handling.
