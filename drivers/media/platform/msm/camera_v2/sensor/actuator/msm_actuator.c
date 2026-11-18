@@ -13,6 +13,7 @@
 #define pr_fmt(fmt) "%s:%d " fmt, __func__, __LINE__
 
 #include <linux/module.h>
+#include <linux/pinctrl/consumer.h>
 #include "msm_sd.h"
 #include "msm_actuator.h"
 #include "msm_cci.h"
@@ -47,6 +48,8 @@ static struct msm_actuator *actuators[] = {
 	&msm_hvcm_actuator_table,
 	&msm_bivcm_actuator_table,
 };
+
+extern int Get_Ois_DW_Status(void);
 
 static int32_t msm_actuator_piezo_set_default_focus(
 	struct msm_actuator_ctrl_t *a_ctrl,
@@ -172,6 +175,7 @@ static int msm_actuator_bivcm_handle_i2c_ops(
 	uint16_t value = 0, reg_data = 0;
 	uint32_t size = a_ctrl->reg_tbl_size, i = 0;
 	int32_t rc = 0;
+	unsigned char out[5];
 	struct msm_camera_i2c_reg_array i2c_tbl;
 	struct msm_camera_i2c_reg_setting reg_setting;
 	enum msm_camera_i2c_reg_addr_type save_addr_type =
@@ -196,6 +200,35 @@ static int msm_actuator_bivcm_handle_i2c_ops(
 			i2c_tbl.reg_data = i2c_byte2;
 			i2c_tbl.delay = delay;
 			a_ctrl->i2c_tbl_index++;
+
+			if (a_ctrl->project_name &&
+				!strcmp(a_ctrl->project_name, "x2")) {
+				/*
+				 * The Letv x2 sends the DAC to the OIS part as one
+				 * four byte sequence, and only while the OIS firmware
+				 * is running; there is no plain register write then.
+				 */
+				if (Get_Ois_DW_Status() == 1) {
+					out[0] = i2c_byte1;
+					out[1] = 0x90;
+					out[2] = 0x0;
+					out[3] = i2c_byte2 / 256;
+					out[4] = i2c_byte2 % 256;
+					a_ctrl->i2c_client.addr_type =
+						MSM_CAMERA_I2C_BYTE_ADDR;
+					rc = a_ctrl->i2c_client.
+						i2c_func_tbl->i2c_write_seq(
+						&a_ctrl->i2c_client, out[0],
+						&out[1], 4);
+					a_ctrl->i2c_client.addr_type =
+						save_addr_type;
+					if (rc < 0) {
+						pr_err("i2c write error:%d\n", rc);
+						return rc;
+					}
+				}
+				break;
+			}
 
 			reg_setting.reg_setting = &i2c_tbl;
 			reg_setting.data_type = a_ctrl->i2c_data_type;
@@ -1539,6 +1572,7 @@ static struct msm_camera_i2c_fn_t msm_sensor_cci_func_tbl = {
 	.i2c_read_seq = msm_camera_cci_i2c_read_seq,
 	.i2c_write = msm_camera_cci_i2c_write,
 	.i2c_write_table = msm_camera_cci_i2c_write_table,
+	.i2c_write_seq = msm_camera_cci_i2c_write_seq,
 	.i2c_write_seq_table = msm_camera_cci_i2c_write_seq_table,
 	.i2c_write_table_w_microdelay =
 		msm_camera_cci_i2c_write_table_w_microdelay,
@@ -1969,6 +2003,14 @@ static int32_t msm_actuator_platform_probe(struct platform_device *pdev)
 		pr_err("failed rc %d\n", rc);
 		return rc;
 	}
+
+	/*
+	 * LeEco boards name the actuator variant in qcom,proj-name; boards
+	 * without it keep the stock DAC write path.
+	 */
+	if (of_property_read_string((&pdev->dev)->of_node, "qcom,proj-name",
+		&msm_actuator_t->project_name) < 0)
+		msm_actuator_t->project_name = NULL;
 
 	if (of_find_property((&pdev->dev)->of_node,
 			"qcom,cam-vreg-name", NULL)) {
