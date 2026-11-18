@@ -114,6 +114,9 @@ config SND_SOC_ALL_CODECS
 	select SND_SOC_TAS5086 if I2C
 	select SND_SOC_TAS571X if I2C
 	select SND_SOC_TFA9879 if I2C
+	select SND_SOC_TFA98XX if I2C
+	select SND_SOC_MAX98927 if I2C
+	select SND_SOC_ES9018 if I2C
 	select SND_SOC_TLV320AIC23_I2C if I2C
 	select SND_SOC_TLV320AIC23_SPI if SPI_MASTER
 	select SND_SOC_TLV320AIC26 if SPI_MASTER
@@ -993,6 +996,23 @@ config SND_SOC_MSM_HDMI_CODEC_RX
 	help
 	HDMI audio drivers should be built only if the platform
         supports hdmi panel.
+
+config SND_SOC_ES9018
+	tristate "Audio HiFi support"
+	help
+	  Say Y here to enable the ES9018 audio DAC used on the LeEco boards.
+
+config SND_SOC_TFA98XX
+	tristate "Audio SMART PA support"
+	help
+	  Say Y here to enable the NXP TFA98xx smart PA amplifier family used
+	  on the LeEco boards.
+
+config SND_SOC_MAX98927
+	tristate "Audio SMART PA 98927 support"
+	help
+	  Say Y here to enable the Maxim MAX98927 smart PA amplifier used on
+	  the LeEco zl1.
 
 source "sound/soc/codecs/sdm660_cdc/Kconfig"
 source "sound/soc/codecs/msm_sdw/Kconfig"
