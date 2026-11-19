@@ -2979,7 +2979,7 @@ static ssize_t rgb_start_store(struct device *dev,
 	int i;
 
 	if (isspace(*after))
-		count;
+		count++;
 
 	if (count != size)
 		return -EINVAL;
@@ -2989,7 +2989,7 @@ static ssize_t rgb_start_store(struct device *dev,
 
 	led_array = dev_get_drvdata(&led->pdev->dev);
 
-	for (i = 0; i < led_array->num_leds; i) {
+	for (i = 0; i < led_array->num_leds; i++) {
 		switch (led_array[i].id) {
 		case QPNP_ID_RGB_RED:
 		case QPNP_ID_RGB_GREEN:
@@ -3010,7 +3010,7 @@ static ssize_t rgb_start_store(struct device *dev,
 		}
 	}
 
-	for (i = 0; i < led_array->num_leds; i) {
+	for (i = 0; i < led_array->num_leds; i++) {
 		int rc;
 
 		led_array[i].sync_start = 0;
@@ -3174,6 +3174,10 @@ static DEVICE_ATTR(blink, 0664, blink_show, blink_store);
 static DEVICE_ATTR(blink, 0664, NULL, blink_store);
 #endif
 static DEVICE_ATTR(rgb_blink, 0664, NULL, rgb_blink_store);
+#ifdef CONFIG_VENDOR_LEECO
+static DEVICE_ATTR(on_off_ms, 0660, rgb_on_off_ms_show, rgb_on_off_ms_store);
+static DEVICE_ATTR(rgb_start, 0220, NULL, rgb_start_store);
+#endif
 
 static struct attribute *led_attrs[] = {
 	&dev_attr_led_mode.attr,
