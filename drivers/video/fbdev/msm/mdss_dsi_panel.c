@@ -23,6 +23,10 @@
 #include <linux/err.h>
 #include <linux/string.h>
 
+#if defined(CONFIG_VENDOR_LEECO) && IS_ENABLED(CONFIG_BACKLIGHT_LM3697)
+#include <linux/platform_data/lm3697_bl.h>
+#endif
+
 #include "mdss_dsi.h"
 #include "mdss_dba_utils.h"
 #include "mdss_debug.h"
@@ -883,6 +887,9 @@ static void mdss_dsi_panel_bl_ctrl(struct mdss_panel_data *pdata,
 		led_trigger_event(bl_led_trigger, bl_level);
 		break;
 	case BL_PWM:
+#if defined(CONFIG_VENDOR_LEECO) && IS_ENABLED(CONFIG_BACKLIGHT_LM3697)
+		lm3697_bl_set(bl_level);
+#endif
 		mdss_dsi_panel_bklt_pwm(ctrl_pdata, bl_level);
 		break;
 	case BL_DCS_CMD:
