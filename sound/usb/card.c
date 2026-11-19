@@ -697,6 +697,10 @@ static int usb_audio_probe(struct usb_interface *intf,
 	chip->num_interfaces++;
 	usb_set_intfdata(intf, chip);
 	intf->needs_remote_wakeup = 1;
+#ifdef CONFIG_VENDOR_LEECO
+	if (IS_LETV_USB_AUDIO(chip->usb_id))
+		pm_runtime_set_autosuspend_delay(&chip->dev->dev, 40 * 1000);
+#endif
 	usb_enable_autosuspend(chip->dev);
 	atomic_dec(&chip->active);
 	mutex_unlock(&register_mutex);
@@ -708,8 +712,14 @@ static int usb_audio_probe(struct usb_interface *intf,
 		 * decrement before memory is possibly returned.
 		 */
 		atomic_dec(&chip->active);
-		if (!chip->num_interfaces)
+		if (!chip->num_interfaces) {
+#ifdef CONFIG_VENDOR_LEECO
+			/* No accessory is attached on a freed card. */
+			if (letv_usb_audio_pid == USB_ID_PRODUCT(chip->usb_id))
+				letv_usb_audio_pid = 0;
+#endif
 			snd_card_free(chip->card);
+		}
 	}
 	mutex_unlock(&register_mutex);
 	return err;
@@ -761,6 +771,10 @@ static void usb_audio_disconnect(struct usb_interface *intf)
 		list_for_each_entry(mixer, &chip->mixer_list, list) {
 			snd_usb_mixer_disconnect(mixer);
 		}
+#ifdef CONFIG_VENDOR_LEECO
+		if (letv_usb_audio_pid == USB_ID_PRODUCT(chip->usb_id))
+			letv_usb_audio_pid = 0;
+#endif
 	}
 
 	chip->num_interfaces--;
