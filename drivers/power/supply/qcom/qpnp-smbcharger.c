@@ -288,6 +288,10 @@ struct smbchg_chip {
 	struct work_struct		usb_set_online_work;
 	struct delayed_work		vfloat_adjust_work;
 	struct delayed_work		hvdcp_det_work;
+#ifdef CONFIG_VENDOR_LEECO
+	struct delayed_work		letv_pd_set_vol_cur_work;
+	struct delayed_work		pd_charger_init_work;
+#endif
 	spinlock_t			sec_access_lock;
 	struct mutex			therm_lvl_lock;
 	struct mutex			usb_set_online_lock;
@@ -4988,6 +4992,36 @@ static int smbchg_restricted_charging(struct smbchg_chip *chip, bool enable)
 }
 
 #ifdef CONFIG_VENDOR_LEECO
+enum le_pd_type {
+	LE_PD_TYPE_UNKNOWN = 0,
+	LE_PD_TYPE_EV_24ACN,
+	LE_PD_TYPE_EV_24AEU,
+	LE_PD_TYPE_EV_24AIN,
+	LE_PD_TYPE_EV_24AUK,
+};
+
+/* LeEco PD adapter state, shared by the announce hooks and the charge loop. */
+static struct smbchg_chip *pd_smbchg_chip;
+static int le_pd_type_flag = LE_PD_TYPE_UNKNOWN;
+static int pd_init_voltage;
+static int pd_init_ma;
+static bool delay_pd_state;
+static int pd_init_flag;
+static int new_pd_vol;
+static int pre_pd_vol;
+static int pd_det_flag;
+
+static void smbchg_pd_state_clear(void)
+{
+	pd_det_flag = 0;
+	pd_init_flag = 0;
+	new_pd_vol = 0;
+	pre_pd_vol = 0;
+	pd_init_voltage = 0;
+	pd_init_ma = 0;
+	le_pd_type_flag = LE_PD_TYPE_UNKNOWN;
+}
+
 static void smbchg_pd_icl_release(struct smbchg_chip *chip)
 {
 	int rc;
@@ -5010,8 +5044,21 @@ static void handle_usb_removal(struct smbchg_chip *chip)
 
 	pr_smb(PR_STATUS, "triggered\n");
 #ifdef CONFIG_VENDOR_LEECO
-	/* The negotiated PD limit must not outlive the adapter. */
+	/* Neither the PD limit nor the PD works outlive the adapter. */
 	smbchg_pd_icl_release(chip);
+	if (pd_det_flag) {
+		/*
+		 * The steering work requeues itself, so a running copy has
+		 * to be waited for instead of just cancelled.
+		 */
+		cancel_delayed_work_sync(&chip->pd_charger_init_work);
+		cancel_delayed_work_sync(&chip->letv_pd_set_vol_cur_work);
+		/* AICL was switched off for the fixed voltage adapter. */
+		smbchg_sec_masked_write(chip,
+					chip->usb_chgpth_base + USB_AICL_CFG,
+					AICL_EN_BIT, AICL_EN_BIT);
+	}
+	smbchg_pd_state_clear();
 #endif
 	smbchg_aicl_deglitch_wa_check(chip);
 	/* Clear the OV detected status set before */
@@ -8964,14 +9011,6 @@ static void rerun_hvdcp_det_if_necessary(struct smbchg_chip *chip)
 }
 
 #ifdef CONFIG_VENDOR_LEECO
-enum le_pd_type {
-	LE_PD_TYPE_UNKNOWN = 0,
-	LE_PD_TYPE_EV_24ACN,
-	LE_PD_TYPE_EV_24AEU,
-	LE_PD_TYPE_EV_24AIN,
-	LE_PD_TYPE_EV_24AUK,
-};
-
 struct le_pd_type_info {
 	const char *name;
 	int type;
@@ -8998,16 +9037,216 @@ static const int le_pd_ma_table[] = {
 	4000, 4200, 4400, 4600, 4800,
 };
 
-static struct smbchg_chip *pd_smbchg_chip;
-static int le_pd_type_flag = LE_PD_TYPE_UNKNOWN;
-static int pd_init_voltage;
-static int pd_init_ma;
-static bool delay_pd_state;
+/*
+ * The PD controller supplies the real implementation.  The weak stub keeps the
+ * charger linkable when it is not built, which leaves the adapter alone.
+ */
+void __weak letv_pd_set_adjust_charger_parameter(int voltage, int mA)
+{
+}
+
+/* The adapter is a fixed voltage source, so only its output may be steered. */
+#define PD_VBUS_LOW_THRESHOLD		5200
+#define PD_VBUS_HIGH_THRESHOLD		9000
+#define PD_CABLE_LOSS_LVL0		800
+#define PD_CABLE_LOSS_LVL1		800
+#define PD_INIT_VOL			7000
+#define PD_CONSTANT_MA			3600
+#define PD_CHECK_WROK_UPDATE_MS		5000
+#define PD_VBUS_INIT_CHECK_GAP		1000
+#define PD_CHARGER_INIT_WORK_DELAY	7000
+#define LE_PD_ADJUST_VOL_DELAY		500
+#define BLACK_CALL_MODE_CURRENT		1000
+#define QUICK_CHARGE_MODE_CURRENT	1000
+
+/*
+ * Pick the adapter voltage that covers the charge power at 85% efficiency,
+ * rounded up to the next step the adapter can produce.
+ */
+static int smbchg_optimal_pd_vbus(struct smbchg_chip *chip, int ibat, int iin,
+				  int vbat)
+{
+	int i, temp, vbus_set;
+
+	if (iin <= 0)
+		return PD_VBUS_LOW_THRESHOLD;
+
+	temp = ibat * vbat;
+	temp = (temp * 100) / 85;
+	vbus_set = temp / iin;
+
+	i = find_smaller_in_array(le_pd_vol_table, vbus_set,
+				  ARRAY_SIZE(le_pd_vol_table));
+	if (i < 0) {
+		i = 0;
+		pr_err("voltage counted is error, force 3V\n");
+	} else if (i == (ARRAY_SIZE(le_pd_vol_table) - 1)) {
+		vbus_set = le_pd_vol_table[i];
+	} else {
+		vbus_set = le_pd_vol_table[i + 1];
+	}
+
+	if (chip->usb_therm_lvl_sel == 0)
+		vbus_set = vbus_set + PD_CABLE_LOSS_LVL0;
+	if (chip->usb_therm_lvl_sel == 1)
+		vbus_set = vbus_set + PD_CABLE_LOSS_LVL1;
+
+	if (vbus_set < PD_VBUS_LOW_THRESHOLD)
+		vbus_set = PD_VBUS_LOW_THRESHOLD;
+	if (vbus_set > PD_VBUS_HIGH_THRESHOLD)
+		vbus_set = PD_VBUS_HIGH_THRESHOLD;
+	return vbus_set;
+}
+
+/*
+ * Track the charge power and ask the adapter for the voltage it needs.
+ */
+static void smbchg_letv_pd_set_vol_cur_work(struct work_struct *work)
+{
+	struct smbchg_chip *chip = container_of(work,
+					struct smbchg_chip,
+					letv_pd_set_vol_cur_work.work);
+	struct power_supply *parallel_psy = get_parallel_psy(chip);
+	union power_supply_propval prop = {0, }, pval = {0, };
+	int rc, vbus_vol = 0, bat_vol, chg_cur = 0, fcc_current = 0;
+	int usb_icl = 0, vbus_set = 0;
+
+	if (!is_usb_present(chip) && !is_dc_present(chip)) {
+		pr_smb(PR_STATUS, "No inputs present, skipping\n");
+		smbchg_pd_state_clear();
+		return;
+	}
+
+	if (pd_init_flag == 0) {
+		pd_init_flag = 1;
+		pre_pd_vol = new_pd_vol = PD_INIT_VOL;
+		letv_pd_set_adjust_charger_parameter(PD_INIT_VOL,
+						     PD_CONSTANT_MA);
+		smbchg_change_usb_supply_type(chip,
+					      POWER_SUPPLY_TYPE_USB_LE_PD);
+	}
+
+	rc = power_supply_get_property(chip->usb_psy,
+				       POWER_SUPPLY_PROP_VOLTAGE_NOW, &prop);
+	if (rc == 0)
+		vbus_vol = prop.intval / 1000;
+	chg_cur = get_prop_batt_current_now(chip) / 1000;
+
+	bat_vol = get_prop_batt_voltage_now(chip) / 1000;
+	if ((chip->parallel.current_max_ma == 0) || !parallel_psy) {
+		fcc_current = chip->fastchg_current_ma;
+	} else {
+		power_supply_get_property(parallel_psy,
+			POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX, &pval);
+		fcc_current = chip->fastchg_current_ma + pval.intval / 1000;
+	}
+
+	if (chip->black_call_mode == 1)
+		usb_icl = BLACK_CALL_MODE_CURRENT;
+	else if (chip->quick_charge_mode == 1)
+		usb_icl = QUICK_CHARGE_MODE_CURRENT;
+	else if (chip->usb_thermal_mitigation)
+		usb_icl = chip->usb_thermal_mitigation[chip->usb_therm_lvl_sel];
+	else
+		usb_icl = chip->fastchg_current_ma;
+
+	vbus_set = smbchg_optimal_pd_vbus(chip, fcc_current, usb_icl, bat_vol);
+
+	pr_smb(PR_STATUS,
+		"vbus:%d, vbat:%d, cur:%d, setvbus:%d, prevbus:%d, fcc:%d\n",
+		vbus_vol, bat_vol, chg_cur, vbus_set, pre_pd_vol, fcc_current);
+	new_pd_vol = vbus_set;
+	if (pre_pd_vol != new_pd_vol) {
+		pre_pd_vol = new_pd_vol;
+		letv_pd_set_adjust_charger_parameter(new_pd_vol,
+						     PD_CONSTANT_MA);
+	}
+
+	queue_delayed_work(system_power_efficient_wq,
+			   &chip->letv_pd_set_vol_cur_work,
+			   msecs_to_jiffies(PD_CHECK_WROK_UPDATE_MS));
+}
+
+/*
+ * Wait for the adapter to settle, then take over current limiting from AICL
+ * and start steering its voltage.
+ */
+static void smbchg_pd_charger_init_work(struct work_struct *work)
+{
+	struct smbchg_chip *chip = container_of(work,
+					struct smbchg_chip,
+					pd_charger_init_work.work);
+	union power_supply_propval prop = {0, };
+	enum power_supply_type usb_supply_type;
+	char *usb_type_name;
+	int rc, vbus_vol = 0;
+	bool charging_off = false;
+
+	if (!is_usb_present(chip) && !is_dc_present(chip)) {
+		pr_smb(PR_STATUS, "No inputs present, skipping\n");
+		smbchg_pd_state_clear();
+		return;
+	}
+
+	rc = smbchg_charging_en(chip, false);
+	if (rc < 0) {
+		dev_err(chip->dev,
+			"Couldn't disable battery charging=%d\n", rc);
+		goto out;
+	}
+	charging_off = true;
+	msleep(100);
+	rc = power_supply_get_property(chip->usb_psy,
+				       POWER_SUPPLY_PROP_VOLTAGE_NOW, &prop);
+	if (rc == 0) {
+		vbus_vol = prop.intval / 1000;
+		pr_smb(PR_STATUS, "read vbus_vol: %d\n", vbus_vol);
+	}
+	rc = smbchg_charging_en(chip, true);
+	if (rc < 0) {
+		dev_err(chip->dev, "Couldn't enable battery charging=%d\n", rc);
+		goto out;
+	}
+	charging_off = false;
+	if (abs(pd_init_voltage - vbus_vol) > PD_VBUS_INIT_CHECK_GAP) {
+		pr_smb(PR_STATUS, "vbus read is different more than 1000mV\n");
+		goto out;
+	}
+
+	read_usb_type(chip, &usb_type_name, &usb_supply_type);
+	pr_smb(PR_STATUS, "inserted type = %d (%s)\n",
+		usb_supply_type, usb_type_name);
+
+	smbchg_change_usb_supply_type(chip, POWER_SUPPLY_TYPE_USB_PD);
+
+	/* The adapter limits the current, so AICL has nothing to measure. */
+	rc = smbchg_sec_masked_write(chip, chip->usb_chgpth_base + USB_AICL_CFG,
+				     AICL_EN_BIT, 0);
+	if (rc < 0)
+		pr_err("Couldn't disable AICL rc=%d\n", rc);
+
+	if (le_pd_type_flag != LE_PD_TYPE_UNKNOWN)
+		queue_delayed_work(system_power_efficient_wq,
+				   &chip->letv_pd_set_vol_cur_work,
+				   msecs_to_jiffies(LE_PD_ADJUST_VOL_DELAY));
+	return;
+out:
+	/* Giving up on the adapter must not leave charging off. */
+	if (charging_off) {
+		rc = smbchg_charging_en(chip, true);
+		if (rc < 0)
+			dev_err(chip->dev,
+				"Couldn't restore battery charging=%d\n", rc);
+	}
+	/* Nor may the announced current outlive the handshake that failed. */
+	smbchg_pd_icl_release(chip);
+	smbchg_pd_state_clear();
+}
 
 /*
  * Called by letv_pd when the adapter advertises its voltage and current.
- * The negotiated current becomes a USB ICL vote; the voltage is only kept,
- * since the charger is fed whatever the adapter settles on.
+ * The negotiated current becomes a USB ICL vote right away; the voltage is
+ * only steered once the adapter has settled, from the init work.
  */
 int letv_pd_notice_charger_in_parameter(int voltage, int mA)
 {
@@ -9039,6 +9278,10 @@ int letv_pd_notice_charger_in_parameter(int voltage, int mA)
 	smbchg_pd_icl_release(chip);
 	if (vote(chip->usb_icl_votable, PD_ICL_VOTER, true, pd_init_ma) < 0)
 		pr_err("failed to vote %dmA for PD\n", pd_init_ma);
+
+	pd_det_flag = 1;
+	schedule_delayed_work(&chip->pd_charger_init_work,
+			      msecs_to_jiffies(PD_CHARGER_INIT_WORK_DELAY));
 
 	return 0;
 err:
@@ -9296,6 +9539,12 @@ static int smbchg_probe(struct platform_device *pdev)
 			smbchg_parallel_usb_en_work);
 	INIT_DELAYED_WORK(&chip->vfloat_adjust_work, smbchg_vfloat_adjust_work);
 	INIT_DELAYED_WORK(&chip->hvdcp_det_work, smbchg_hvdcp_det_work);
+#ifdef CONFIG_VENDOR_LEECO
+	INIT_DELAYED_WORK(&chip->letv_pd_set_vol_cur_work,
+			  smbchg_letv_pd_set_vol_cur_work);
+	INIT_DELAYED_WORK(&chip->pd_charger_init_work,
+			  smbchg_pd_charger_init_work);
+#endif
 	init_completion(&chip->src_det_lowered);
 	init_completion(&chip->src_det_raised);
 	init_completion(&chip->usbin_uv_lowered);
