@@ -742,25 +742,21 @@ static int gf_remove(struct platform_device *pdev)
 	return 0;
 }
 
-#if defined(USE_SPI_BUS)
-static int gf_suspend(struct spi_device *spi, pm_message_t mesg)
-#elif defined(USE_PLATFORM_BUS)
-static int gf_suspend(struct platform_device *pdev, pm_message_t state)
-#endif
+static int __maybe_unused gf_suspend(struct device *dev)
 {
 	pr_debug("gf_suspend.\n");
 	return 0;
 }
 
-#if defined(USE_SPI_BUS)
-static int gf_resume(struct spi_device *spi)
-#elif defined(USE_PLATFORM_BUS)
-static int gf_resume(struct platform_device *pdev)
-#endif
+static int __maybe_unused gf_resume(struct device *dev)
 {
 	pr_debug("gf_resume.\n");
 	return 0;
 }
+
+static const struct dev_pm_ops gf_pm_ops = {
+	SET_SYSTEM_SLEEP_PM_OPS(gf_suspend, gf_resume)
+};
 
 static const struct of_device_id gx_match_table[] = {
 	{ .compatible = GF_SPIDEV_NAME },
@@ -777,11 +773,10 @@ static struct platform_driver gf_driver = {
 		.name = GF_DEV_NAME,
 		.owner = THIS_MODULE,
 		.of_match_table = gx_match_table,
+		.pm = &gf_pm_ops,
 	},
 	.probe = gf_probe,
 	.remove = gf_remove,
-	.suspend = gf_suspend,
-	.resume = gf_resume,
 };
 
 static int __init gf_init(void)
