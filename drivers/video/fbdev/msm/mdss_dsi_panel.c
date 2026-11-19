@@ -39,6 +39,14 @@
 
 DEFINE_LED_TRIGGER(bl_led_trigger);
 
+#if defined(CONFIG_VENDOR_LEECO) && IS_ENABLED(CONFIG_BACKLIGHT_LM3697)
+/*
+ * The LM3697 panels declare 11-bit brightness, while the PMI8994 WLED
+ * string the fallback drives is programmed on a 12-bit scale.
+ */
+#define LEECO_WLED_MAX_BRIGHTNESS	4095
+#endif
+
 void mdss_dsi_panel_pwm_cfg(struct mdss_dsi_ctrl_pdata *ctrl)
 {
 	if (ctrl->pwm_pmi)
@@ -891,10 +899,18 @@ static void mdss_dsi_panel_bl_ctrl(struct mdss_panel_data *pdata,
 		/*
 		 * The LM3697 i2c node is a best guess, so a chip that never
 		 * probed must not leave the panel dark. Fall back to the
-		 * PMI8994 WLED string these panels used before.
+		 * PMI8994 WLED string these panels used before, rescaled to
+		 * its wider brightness range.
 		 */
-		if (lm3697_bl_set(bl_level))
-			led_trigger_event(bl_led_trigger, bl_level);
+		if (lm3697_bl_set(bl_level)) {
+			u32 wled_level = bl_level;
+
+			if (pdata->panel_info.bl_max)
+				wled_level = bl_level *
+					LEECO_WLED_MAX_BRIGHTNESS /
+					pdata->panel_info.bl_max;
+			led_trigger_event(bl_led_trigger, wled_level);
+		}
 #endif
 		mdss_dsi_panel_bklt_pwm(ctrl_pdata, bl_level);
 		break;
