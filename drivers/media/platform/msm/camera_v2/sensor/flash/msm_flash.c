@@ -34,15 +34,19 @@ static const struct of_device_id msm_flash_dt_match[] = {
 	{}
 };
 
+#ifdef CONFIG_MSM_I2C_FLASH
 static struct msm_flash_table lm3643_i2c_flash_table;
 static struct msm_flash_table lm3648_i2c_flash_table;
+#endif
 static struct msm_flash_table msm_i2c_flash_table;
 static struct msm_flash_table msm_gpio_flash_table;
 static struct msm_flash_table msm_pmic_flash_table;
 
 static struct msm_flash_table *flash_table[] = {
+#ifdef CONFIG_MSM_I2C_FLASH
 	&lm3643_i2c_flash_table,
 	&lm3648_i2c_flash_table,
+#endif
 	&msm_i2c_flash_table,
 	&msm_gpio_flash_table,
 	&msm_pmic_flash_table
@@ -1136,12 +1140,16 @@ static int32_t msm_flash_get_dt_data(struct device_node *of_node,
 		/* Set default master 0 */
 		fctrl->cci_i2c_master = MASTER_0;
 		rc = 0;
-	} else if (of_property_match_string(of_node, "label", LM3643_NAME) >= 0) {
-		/* LeEco parts: LM3643 on CCI master 0, LM3648 on master 1 */
-		fctrl->flash_driver_type = fctrl->cci_i2c_master ?
-			FLASH_DRIVER_LM3648 : FLASH_DRIVER_LM3643;
 	} else {
-		fctrl->flash_driver_type = FLASH_DRIVER_I2C;
+#ifdef CONFIG_MSM_I2C_FLASH
+		if (of_property_match_string(of_node, "label",
+						LM3643_NAME) >= 0) {
+			/* LeEco parts: LM3643 on CCI master 0, LM3648 on 1 */
+			fctrl->flash_driver_type = fctrl->cci_i2c_master ?
+				FLASH_DRIVER_LM3648 : FLASH_DRIVER_LM3643;
+		} else
+#endif
+			fctrl->flash_driver_type = FLASH_DRIVER_I2C;
 	}
 
 	/* Read the flash and torch source info from device tree node */
@@ -1425,6 +1433,7 @@ static struct msm_flash_table msm_i2c_flash_table = {
 	},
 };
 
+#ifdef CONFIG_MSM_I2C_FLASH
 static struct msm_flash_table lm3643_i2c_flash_table = {
 	.flash_driver_type = FLASH_DRIVER_LM3643,
 	.func_tbl = {
@@ -1446,6 +1455,7 @@ static struct msm_flash_table lm3648_i2c_flash_table = {
 		.camera_flash_high = lm3643_flash_led_high,
 	},
 };
+#endif
 
 module_init(msm_flash_init_module);
 module_exit(msm_flash_exit_module);
