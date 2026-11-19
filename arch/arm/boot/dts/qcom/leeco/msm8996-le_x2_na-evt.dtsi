@@ -90,9 +90,13 @@
 };
 
 &dsi_dual_truly_cmd {
-	qcom,mdss-dsi-bl-pmic-control-type = "bl_ctrl_wled";
+	qcom,mdss-dsi-bl-pmic-control-type = "bl_ctrl_pwm";
+	qcom,mdss-dsi-bl-pwm-pmi;
+	qcom,mdss-dsi-bl-pmic-pwm-frequency = <100>;
+	pwms = <&pmi8994_pwm_4 0 0>;
+	pwm-names = "backlight";
 	qcom,mdss-dsi-bl-min-level = <1>;
-	qcom,mdss-dsi-bl-max-level = <4095>;
+	qcom,mdss-dsi-bl-max-level = <2047>;
 	qcom,cont-splash-enabled;
 	qcom,panel-supply-entries = <&dsi_panel_pwr_supply>;
 
@@ -349,6 +353,36 @@
 	silabs4705@11 { /* SiLabs FM chip, slave id 0x11*/
 		status = "disabled";
 	};
+
+	/*
+	 * Bus, address and HWEN GPIO are assumed: no LeEco board file has ever
+	 * described this chip, so they still need to be checked against the
+	 * schematic. The PWM input stays unused and dimming is register based.
+	 * If the chip is not at this address the panel driver falls back to the
+	 * PMI8994 WLED string, so a wrong node costs brightness range, not the
+	 * whole backlight.
+	 */
+	lm3697@36 {
+		compatible = "ti,lm3697";
+		reg = <0x36>;
+		ti,enable-gpio = <&pmi8994_gpios 6 0>;
+
+		backlight {
+			backlight-name = "lcd-backlight";
+			hvled1-used;
+			hvled2-used;
+			hvled3-used;
+			max-current-milliamp = <30>;
+			initial-brightness = <0>;
+		};
+	};
+};
+
+&pmi8994_pwm_4 {
+	qcom,channel-owner = "lcd_bl";
+	qcom,dtest-line = <4>;
+	qcom,dtest-output = <1>;
+	status = "okay";
 };
 
 &i2c_8 {
