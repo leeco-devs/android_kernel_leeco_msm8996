@@ -84,6 +84,9 @@
 /* Enable HDCP by default */
 static bool hdcp_feature_on = true;
 
+/* Type of the bridge driving the HDMI output, set by an MHL or DP driver. */
+static int (*hdmi_tx_device_show)(char *buf);
+
 /*
  * CN represents IT content type, if ITC bit in infoframe data byte 3
  * is set, CN bits will represent content type as below:
@@ -1458,6 +1461,24 @@ end:
 	return rc;
 } /* hdmi_tx_sysfs_wta_pll_enable */
 
+static ssize_t hdmi_tx_sysfs_rda_dev_type(struct device *dev,
+	struct device_attribute *attr, char *buf)
+{
+	int len;
+
+	if (!hdmi_tx_device_show)
+		return -ENODEV;
+
+	hdmi_tx_device_show(buf);
+
+	/* The bridge callbacks write the name without a line ending. */
+	len = strlen(buf);
+	if (len < PAGE_SIZE - 1)
+		buf[len++] = '\n';
+
+	return len;
+} /* hdmi_tx_sysfs_rda_dev_type */
+
 static DEVICE_ATTR(connected, S_IRUGO, hdmi_tx_sysfs_rda_connected, NULL);
 static DEVICE_ATTR(hot_plug, S_IWUSR, NULL, hdmi_tx_sysfs_wta_hot_plug);
 static DEVICE_ATTR(sim_mode, S_IRUGO | S_IWUSR, hdmi_tx_sysfs_rda_sim_mode,
@@ -1482,6 +1503,7 @@ static DEVICE_ATTR(hdmi_ppm, S_IRUGO | S_IWUSR, NULL,
 	hdmi_tx_sysfs_wta_hdmi_ppm);
 static DEVICE_ATTR(pll_enable, S_IRUGO | S_IWUSR, hdmi_tx_sysfs_rda_pll_enable,
 	hdmi_tx_sysfs_wta_pll_enable);
+static DEVICE_ATTR(dev_type, S_IRUGO, hdmi_tx_sysfs_rda_dev_type, NULL);
 
 
 static struct attribute *hdmi_tx_fs_attrs[] = {
@@ -1500,6 +1522,7 @@ static struct attribute *hdmi_tx_fs_attrs[] = {
 	&dev_attr_hdr_stream.attr,
 	&dev_attr_hdmi_ppm.attr,
 	&dev_attr_pll_enable.attr,
+	&dev_attr_dev_type.attr,
 	NULL,
 };
 static struct attribute_group hdmi_tx_fs_attrs_group = {
@@ -3407,6 +3430,16 @@ int msm_hdmi_register_mhl(struct platform_device *pdev,
 	ops->set_upstream_hpd = hdmi_tx_set_mhl_hpd;
 
 	hdmi_ctrl->ds_registered = true;
+
+	return 0;
+}
+
+int msm_hdmi_device_show_register(int (*func)(char *buf))
+{
+	if (!func)
+		return -EINVAL;
+
+	hdmi_tx_device_show = func;
 
 	return 0;
 }
