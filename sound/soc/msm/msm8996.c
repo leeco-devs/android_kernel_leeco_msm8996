@@ -9070,6 +9070,7 @@ static char msm8996_max98927_codec_name[32];
  */
 #define MSM8996_MAX98927_GRACE_MS 5000
 
+/* Pinned with a device reference while the give-up timer is armed. */
 static struct platform_device *msm8996_max98927_pdev;
 static bool msm8996_max98927_gave_up;
 
@@ -9078,16 +9079,27 @@ static void msm8996_max98927_giveup(struct work_struct *work)
 	struct platform_device *pdev = msm8996_max98927_pdev;
 	int ret;
 
-	if (!pdev || platform_get_drvdata(pdev))
-		return;
-	if (max98927_get_codec_name())
+	if (!pdev)
 		return;
 
-	dev_warn(&pdev->dev,
-		 "MAX98927 did not register, using the stub dailinks\n");
-	msm8996_max98927_gave_up = true;
-	ret = device_attach(&pdev->dev);
-	dev_dbg(&pdev->dev, "MAX98927 card re-probe returned %d\n", ret);
+	/*
+	 * The reference taken when the timer was armed keeps the device itself
+	 * valid, so everything below is readable even if the card was removed
+	 * or failed to bind in the meantime.  Only re-probe a device the driver
+	 * model still owns; a removed one has nothing left to bind.
+	 */
+	if (device_is_registered(&pdev->dev) &&
+	    !platform_get_drvdata(pdev) && !max98927_get_codec_name()) {
+		dev_warn(&pdev->dev,
+			 "MAX98927 did not register, using the stub dailinks\n");
+		msm8996_max98927_gave_up = true;
+		ret = device_attach(&pdev->dev);
+		dev_dbg(&pdev->dev, "MAX98927 card re-probe returned %d\n",
+			ret);
+	}
+
+	msm8996_max98927_pdev = NULL;
+	put_device(&pdev->dev);
 }
 
 static DECLARE_DELAYED_WORK(msm8996_max98927_giveup_work,
@@ -9666,7 +9678,17 @@ static int msm8996_asoc_machine_probe(struct platform_device *pdev)
 		dev_info(&pdev->dev,
 			 "%s: MAX98927 codec not registered, deferring\n",
 			 __func__);
-		msm8996_max98927_pdev = pdev;
+		/*
+		 * Pin the card device while the timer is armed: the amp can
+		 * still fail to probe and the card itself can be unbound or
+		 * unregistered inside the grace period, freeing the device the
+		 * give-up work has to touch.  Retries landing before the timer
+		 * fires find it already armed and pinned.
+		 */
+		if (!msm8996_max98927_pdev) {
+			msm8996_max98927_pdev = pdev;
+			get_device(&pdev->dev);
+		}
 		/*
 		 * One grace period from the first deferral; the deferred-probe
 		 * retries in between find the timer already armed.
@@ -9675,7 +9697,10 @@ static int msm8996_asoc_machine_probe(struct platform_device *pdev)
 		schedule_delayed_work(&msm8996_max98927_giveup_work, delay);
 		return -EPROBE_DEFER;
 	}
-	cancel_delayed_work(&msm8996_max98927_giveup_work);
+	/*
+	 * The timer is not cancelled here: it fires once, bails out when the
+	 * card or the codec turned up, and drops its own device reference.
+	 */
 #endif
 
 	pdata = devm_kzalloc(&pdev->dev,
