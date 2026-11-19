@@ -12,5 +12,7 @@ typedef enum {
 } typec_port_state;
 
 typec_port_state cclogic_get_port_state(void);
+int cclogic_get_audio_mode(void);
+int letv_audio_mode_supported(void *data);
 
 #endif

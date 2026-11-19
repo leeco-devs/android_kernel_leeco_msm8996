@@ -39,6 +39,7 @@
 #include <linux/regulator/consumer.h>
 #include <linux/pm_wakeup.h>
 #include <linux/power_supply.h>
+#include <linux/cclogic.h>
 #include <linux/cdev.h>
 #include <linux/completion.h>
 #include <linux/clk/msm-clk.h>
@@ -4385,6 +4386,17 @@ static int dwc3_msm_pm_suspend(struct device *dev)
 
 	flush_work(&mdwc->bus_vote_w);
 	atomic_set(&mdwc->pm_suspended, 1);
+
+#ifdef CONFIG_VENDOR_LEECO
+#if IS_ENABLED(CONFIG_USB_CCLOGIC)
+	/* Let the accessory see VBUS drop before the system suspends. */
+	if (mdwc->vbus_reg_on && letv_audio_mode_supported(NULL) &&
+	    cclogic_get_audio_mode() == 0) {
+		dwc3_msm_vbus_reg_set(mdwc, false);
+		msleep(300);
+	}
+#endif
+#endif
 
 	return 0;
 }

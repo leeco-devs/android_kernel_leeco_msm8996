@@ -6110,6 +6110,14 @@ static int smbchg_get_vusb(struct smbchg_chip *chip)
 }
 
 #ifdef CONFIG_VENDOR_LEECO
+/*
+ * The PD controller supplies the real implementation.  The weak stub keeps the
+ * charger linkable when it is not built, which leaves the PD policy alone.
+ */
+void __weak letv_pd_set_typec_temperature(int temp)
+{
+}
+
 static int smbchg_usb_vadc_read(struct smbchg_chip *chip,
 		enum qpnp_vadc_channels channel, union power_supply_propval *val)
 {
@@ -6189,9 +6197,15 @@ static int smbchg_usb_get_property(struct power_supply *psy,
 		if (val->intval < 0)
 			return val->intval;
 		break;
-	case POWER_SUPPLY_PROP_LE_USBIN_TEMP:
-		return smbchg_usb_vadc_read(chip, LR_MUX10_PU1_AMUX_USB_ID_LV,
-				val);
+	case POWER_SUPPLY_PROP_LE_USBIN_TEMP: {
+		int rc;
+
+		rc = smbchg_usb_vadc_read(chip, LR_MUX10_PU1_AMUX_USB_ID_LV,
+					  val);
+		if (!rc)
+			letv_pd_set_typec_temperature(val->intval);
+		return rc;
+	}
 	case POWER_SUPPLY_PROP_LE_VPH_VOLTAGE:
 		return smbchg_usb_vadc_read(chip, VSYS, val);
 #endif
