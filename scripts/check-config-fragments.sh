@@ -11,6 +11,12 @@
 # mentions it. This script reads the fragment itself, so the mistake is an
 # error here instead of a silent no-op later.
 #
+# A symbol that only another architecture's Kconfig defines is dropped the
+# same way, because an arm64 build never reads arch/arm/Kconfig or the files
+# under arch/x86, however the fragment spells it. Those are reported with the
+# architecture and file that do define them, so the fix is a port and not a
+# hunt for a typo.
+#
 # Usage: scripts/check-config-fragments.sh [-s] [-h] [FILE...]
 #   -s, --strict   treat warnings as errors too
 #   -h, --help     show this help
@@ -20,13 +26,16 @@
 # arch/arm64/configs/vendor/msm-perf_defconfig. Pass any other fragments, or a
 # full defconfig, to check those instead.
 #
+# Set target=<arch> to check a fragment against another architecture's
+# Kconfig; the default is arm64.
+#
 # Exit status is 0 when nothing is wrong and 1 on any error.
 
 set -u
 
 usage()
 {
-	sed -n '3,20p' "$0" | sed 's/^# \{0,1\}//'
+	sed -n '/^# Usage:/,/^# Exit status/p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 strict=0
@@ -57,6 +66,11 @@ done
 
 srctree=${srctree:-$(cd "$(dirname "$0")/.." && pwd)}
 
+# The fragments this script checks are arm64, and the only architecture Kconfig
+# an arm64 build reads is arch/arm64/Kconfig; the rest come from the tree-wide
+# Kconfig files. Override with target=... for another architecture.
+target=${target:-arm64}
+
 if [ $# -eq 0 ]; then
 	set -- "$srctree"/arch/arm64/configs/vendor/leeco/*.conf
 	if [ ! -e "$1" ]; then
@@ -85,8 +99,21 @@ if [ ! -s "$kconfigs" ]; then
 fi
 
 # Collect every symbol Kconfig defines, with its type, whether it has a
-# prompt, and where it was defined.
-xargs awk '
+# prompt, and where it was defined. A definition that only lives under another
+# architecture's directory is recorded on its own, because this build never
+# reaches that file.
+xargs awk -v target="$target" '
+# Architecture that owns the Kconfig at path, empty for the common tree and
+# for the target architecture.
+function arch_of(path,   parts, n, i)
+{
+	n = split(path, parts, "/")
+	for (i = 1; i + 1 < n; i++)
+		if (parts[i] == "arch")
+			return parts[i + 1]
+	return ""
+}
+
 function trim(s)
 {
 	sub(/^[ \t]+/, "", s)
@@ -121,6 +148,15 @@ BEGIN {
 	if (line ~ /^(menu)?config[ \t]+[A-Za-z0-9_]+$/) {
 		split(line, fields, /[ \t]+/)
 		sym = fields[2]
+		a = arch_of(FILENAME)
+		if (a != "" && a != target) {
+			if (!(sym in farch)) {
+				farch[sym] = a
+				floc[sym] = FILENAME ":" FNR
+			}
+			sym = ""
+			next
+		}
 		if (!(sym in type)) {
 			type[sym] = "undefined"
 			prompt[sym] = 0
@@ -171,11 +207,19 @@ END {
 		where = prompt[s] ? promptloc[s] : defloc[s]
 		printf "%s\t%s\t%d\t%s\n", s, type[s], prompt[s], where
 	}
+	for (s in farch)
+		if (!(s in type))
+			printf "%s\t-\t0\t%s\t%s\n", s, floc[s], farch[s]
 }' < "$kconfigs" > "$index" || exit 1
 
 # Compare every symbol in the fragments against that table.
 awk -F '\t' '
 NR == FNR {
+	if ($2 == "-") {
+		farch[$1] = $5
+		fwhere[$1] = $4
+		next
+	}
 	type[$1] = $2
 	prompt[$1] = $3
 	where[$1] = $4
@@ -227,7 +271,12 @@ function report(kind, msg)
 	count++
 
 	if (!(sym in type)) {
-		report("error", "is not defined by any Kconfig file")
+		if (sym in farch)
+			report("error", "is defined only under arch/" \
+			       farch[sym] " (" fwhere[sym] "), which the " \
+			       target " build never reads")
+		else
+			report("error", "is not defined by any Kconfig file")
 		next
 	}
 
@@ -259,4 +308,4 @@ END {
 		count, files, errors, warnings
 	exit (errors || (strict && warnings)) ? 1 : 0
 }
-' strict="$strict" files="$#" "$index" "$@"
+' strict="$strict" files="$#" target="$target" "$index" "$@"
