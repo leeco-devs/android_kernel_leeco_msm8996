@@ -5011,6 +5011,45 @@ static int new_pd_vol;
 static int pre_pd_vol;
 static int pd_det_flag;
 
+/*
+ * The ANX7418 public interface polls the battery through these three
+ * hooks.  They report what the vendor charger reported: current and
+ * voltage in milliamps and millivolts, and the charger type the charge
+ * state machine picked, with the full state mapped to 5.
+ */
+int get_charger_charging_current(void)
+{
+	if (!pd_smbchg_chip)
+		return -ENODEV;
+	return get_prop_batt_current_now(pd_smbchg_chip) / 1000;
+}
+EXPORT_SYMBOL(get_charger_charging_current);
+
+int get_battery_voltage(void)
+{
+	if (!pd_smbchg_chip)
+		return -ENODEV;
+	return get_prop_batt_voltage_now(pd_smbchg_chip) / 1000;
+}
+EXPORT_SYMBOL(get_battery_voltage);
+
+int get_charging_status(void)
+{
+	if (!pd_smbchg_chip)
+		return -ENODEV;
+
+	if (get_prop_batt_status(pd_smbchg_chip)
+			== POWER_SUPPLY_STATUS_CHARGING)
+		return get_prop_charge_type(pd_smbchg_chip);
+
+	if (get_prop_batt_status(pd_smbchg_chip)
+			== POWER_SUPPLY_STATUS_FULL)
+		return 5;
+
+	return 0;
+}
+EXPORT_SYMBOL(get_charging_status);
+
 static void smbchg_pd_state_clear(void)
 {
 	pd_det_flag = 0;
