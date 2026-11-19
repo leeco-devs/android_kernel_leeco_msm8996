@@ -8529,6 +8529,41 @@ static const struct soc_enum amic_pwr_lvl_enum =
 	SOC_ENUM_SINGLE_EXT(ARRAY_SIZE(amic_pwr_lvl_text),
 			    amic_pwr_lvl_text);
 
+#ifdef CONFIG_VENDOR_LEECO
+/*
+ * The LeEco audio HAL pulses this control around a low power playback path.
+ * The pulse clears the SWR NPL delay, leaves 10 ms for the reload and latches
+ * it again. Both values drive the same pulse, as in the vendor driver;
+ * tasha_swrm_clock() only clears and sets the delay bit when it gates the SWR
+ * master clock, so it cannot stand in for the pulse.
+ */
+static int wcd_swr_low_power_get(struct snd_kcontrol *kcontrol,
+	struct snd_ctl_elem_value *ucontrol)
+{
+	/* The control is a trigger and keeps no state, so readback is 0. */
+	ucontrol->value.integer.value[0] = 0;
+
+	return 0;
+}
+
+static int wcd_swr_low_power_put(struct snd_kcontrol *kcontrol,
+	struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_codec *codec = snd_soc_kcontrol_codec(kcontrol);
+	struct tasha_priv *tasha = snd_soc_codec_get_drvdata(codec);
+
+	dev_dbg(tasha->dev, "%s: reload NPL delay for %d\n", __func__,
+		(int)ucontrol->value.integer.value[0]);
+	regmap_update_bits(tasha->wcd9xxx->regmap,
+			WCD9335_TEST_DEBUG_NPL_DLY_TEST_1, 0x90, 0x10);
+	usleep_range(10000, 11000);
+	regmap_update_bits(tasha->wcd9xxx->regmap,
+			WCD9335_TEST_DEBUG_NPL_DLY_TEST_1, 0x90, 0x90);
+
+	return 0;
+}
+#endif
+
 static const struct snd_kcontrol_new tasha_snd_controls[] = {
 	SOC_SINGLE_SX_TLV("RX0 Digital Volume", WCD9335_CDC_RX0_RX_VOL_CTL,
 		0, -84, 40, digital_gain), /* -84dB min - 40dB max */
@@ -8755,6 +8790,11 @@ static const struct snd_kcontrol_new tasha_snd_controls[] = {
 	SOC_ENUM_EXT("GSM mode Enable", tasha_vbat_gsm_mode_enum,
 			tasha_vbat_gsm_mode_func_get,
 			tasha_vbat_gsm_mode_func_put),
+
+#ifdef CONFIG_VENDOR_LEECO
+	SOC_SINGLE_EXT("WCD9335_SWR_LOW_POWER", SND_SOC_NOPM, 23, 1, 0,
+		       wcd_swr_low_power_get, wcd_swr_low_power_put),
+#endif
 
 };
 
