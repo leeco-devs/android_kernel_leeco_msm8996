@@ -329,10 +329,10 @@ struct device_node *of_batterydata_get_best_profile(
 		if (rc == -EINVAL) {
 			id_range_pct = 0;
 		} else {
-			pr_err("failed to read battery id range\n");
-			return ERR_PTR(-ENXIO);
+							pr_err("failed to read battery id range\n");
+				return ERR_PTR(-ENXIO);
+			}
 		}
-	}
 
 	/*
 	 * Find the battery data with a battery id resistor closest to this one
@@ -372,13 +372,21 @@ struct device_node *of_batterydata_get_best_profile(
 	}
 
 	if (best_node == NULL) {
+#ifdef CONFIG_VENDOR_LEECO
+		/* First profile is the board's fallback when no id matches. */
+		best_node = of_get_next_child(batterydata_container_node, NULL);
+		if (!best_node) {
+			pr_err("No battery data found\n");
+			return NULL;
+		}
+		pr_info("No battery data found, use default battery data\n");
+#else
 		pr_err("No battery data found\n");
 		return best_node;
-	}
-
-	/* check that profile id is in range of the measured batt_id */
-	if (abs(best_id_kohm - batt_id_kohm) >
+#endif
+	} else if (abs(best_id_kohm - batt_id_kohm) >
 			((best_id_kohm * id_range_pct) / 100)) {
+		/* check that profile id is in range of the measured batt_id */
 		pr_err("out of range: profile id %d batt id %d pct %d",
 			best_id_kohm, batt_id_kohm, id_range_pct);
 		return NULL;
@@ -436,8 +444,18 @@ int of_batterydata_read_data(struct device_node *batterydata_container_node,
 	}
 
 	if (best_node == NULL) {
+#ifdef CONFIG_VENDOR_LEECO
+		/* No profile carried an id, so fall back to the first one. */
+		best_node = of_get_next_child(batterydata_container_node, NULL);
+		if (best_node != NULL)
+			pr_info("No battery data found, use default battery data\n");
+		else
+			pr_err("No battery data found\n");
+#else
 		pr_err("No battery data found\n");
-		return -ENODATA;
+#endif
+		if (best_node == NULL)
+			return -ENODATA;
 	}
 	rc = of_property_read_string(best_node, "qcom,battery-type",
 							&battery_type);
