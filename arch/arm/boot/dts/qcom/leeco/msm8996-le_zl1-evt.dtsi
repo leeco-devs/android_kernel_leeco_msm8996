@@ -507,6 +507,9 @@
 	 * Bus, address and HWEN GPIO are assumed: no LeEco board file has ever
 	 * described this chip, so they still need to be checked against the
 	 * schematic. The PWM input stays unused and dimming is register based.
+	 * If the chip is not at this address the panel driver falls back to the
+	 * PMI8994 WLED string, so a wrong node costs brightness range, not the
+	 * whole backlight.
 	 */
 	lm3697@36 {
 		compatible = "ti,lm3697";

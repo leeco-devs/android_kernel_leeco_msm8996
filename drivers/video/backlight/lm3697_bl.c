@@ -130,10 +130,13 @@ int lm3697_bl_set(int bl_level)
 
 	/*
 	 * Probe may not have run yet, or the chip may be absent from the board
-	 * file, so never dereference a missing backlight here.
+	 * file, so never dereference a missing backlight here. The error also
+	 * tells the caller the panel is on its own for brightness.
 	 */
-	if (!lm3697_bl)
+	if (!lm3697_bl) {
+		pr_warn_once("lm3697: no backlight probed, check the i2c node\n");
 		return -ENODEV;
+	}
 
 	ret = lm3697_bl_enable(lm3697_bl, bl_level > 0);
 	if (ret)

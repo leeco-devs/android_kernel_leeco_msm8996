@@ -888,7 +888,13 @@ static void mdss_dsi_panel_bl_ctrl(struct mdss_panel_data *pdata,
 		break;
 	case BL_PWM:
 #if defined(CONFIG_VENDOR_LEECO) && IS_ENABLED(CONFIG_BACKLIGHT_LM3697)
-		lm3697_bl_set(bl_level);
+		/*
+		 * The LM3697 i2c node is a best guess, so a chip that never
+		 * probed must not leave the panel dark. Fall back to the
+		 * PMI8994 WLED string these panels used before.
+		 */
+		if (lm3697_bl_set(bl_level))
+			led_trigger_event(bl_led_trigger, bl_level);
 #endif
 		mdss_dsi_panel_bklt_pwm(ctrl_pdata, bl_level);
 		break;
@@ -2415,6 +2421,15 @@ int mdss_panel_parse_bl_settings(struct device_node *np,
 				__func__);
 			ctrl_pdata->bklt_ctrl = BL_WLED;
 		} else if (!strcmp(data, "bl_ctrl_pwm")) {
+#if defined(CONFIG_VENDOR_LEECO) && IS_ENABLED(CONFIG_BACKLIGHT_LM3697)
+			/*
+			 * Register the WLED trigger as well, so the fallback
+			 * in mdss_dsi_panel_bl_ctrl() can drive the PMI8994
+			 * string if the LM3697 never probes.
+			 */
+			led_trigger_register_simple("bkl-trigger",
+						    &bl_led_trigger);
+#endif
 			ctrl_pdata->bklt_ctrl = BL_PWM;
 			ctrl_pdata->pwm_pmi = of_property_read_bool(np,
 					"qcom,mdss-dsi-bl-pwm-pmi");
