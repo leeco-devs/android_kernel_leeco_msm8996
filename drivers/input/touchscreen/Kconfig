@@ -106,7 +106,7 @@ config TOUCHSCREEN_AR1021_I2C
 
 config TOUCHSCREEN_ATMEL_MXT
 	tristate "Atmel mXT I2C Touchscreen"
-	depends on I2C
+	depends on I2C && !VENDOR_LEECO
 	select FW_LOADER
 	help
 	  Say Y here if you have Atmel mXT series I2C touchscreen,
@@ -119,7 +119,7 @@ config TOUCHSCREEN_ATMEL_MXT
 
 config TOUCHSCREEN_ATMEL_MAXTOUCH_TS
 	tristate "Atmel Maxtouch Touchscreen Family"
-	depends on I2C
+	depends on I2C && !VENDOR_LEECO
 	help
 	  Say Y here if you have Atmel MaXTouch Touchscreen
 	  using i2c connected to your system.
