@@ -4152,8 +4152,8 @@ static int mxt_proc_init(struct kernfs_node *sysfs_node_parent)
 	struct proc_dir_entry *proc_symlink_tmp  = NULL;
 
 	buf = kzalloc(PATH_MAX, GFP_KERNEL);
-	if (buf)
-		path = kernfs_path(sysfs_node_parent, buf, PATH_MAX);
+	if (buf && kernfs_path(sysfs_node_parent, buf, PATH_MAX) >= 0)
+		path = buf;
 
 	proc_entry_tp = proc_mkdir("touchpanel", NULL);
 	if (proc_entry_tp == NULL) {
