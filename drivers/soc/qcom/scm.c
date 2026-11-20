@@ -18,7 +18,7 @@
 #include <linux/err.h>
 #include <linux/init.h>
 #include <linux/delay.h>
-#include <linux/jiffies.h>
+#include <linux/ktime.h>
 
 #include <asm/cacheflush.h>
 #include <asm/compiler.h>
@@ -293,7 +293,8 @@ static int scm_call_common(u32 svc_id, u32 cmd_id, const void *cmd_buf,
 {
 	int ret;
 	struct scm_response *rsp;
-	unsigned long start, end, timeout;
+	unsigned long start, end;
+	ktime_t timeout;
 
 	scm_buf->len = scm_buf_length;
 	scm_buf->buf_offset = offsetof(struct scm_command, buf);
@@ -312,12 +313,12 @@ static int scm_call_common(u32 svc_id, u32 cmd_id, const void *cmd_buf,
 	rsp = scm_command_to_response(scm_buf);
 	start = (unsigned long)rsp;
 
-	timeout = jiffies + msecs_to_jiffies(SCM_COMPLETE_TIMEOUT_MS);
+	timeout = ktime_add_ms(ktime_get(), SCM_COMPLETE_TIMEOUT_MS);
 	for (;;) {
 		scm_inv_range(start, start + sizeof(*rsp));
 		if (rsp->is_complete)
 			break;
-		if (time_after(jiffies, timeout)) {
+		if (ktime_after(ktime_get(), timeout)) {
 			pr_err("scm: call 0x%x never completed\n", scm_buf->id);
 			return -ETIMEDOUT;
 		}
