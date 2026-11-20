@@ -1802,7 +1802,7 @@ static int rgb_duration_config(struct qpnp_led_data *led)
 	} else {
 		num_duty_pcts = RGB_LED_RAMP_STEP_COUNT;
 
-		for (i = 0; i < num_duty_pcts; i) {
+		for (i = 0; i < num_duty_pcts; i++) {
 			pwm_cfg->duty_cycles->duty_pcts[i] =
 				(led->cdev.brightness *
 				 (100 / (RGB_LED_RAMP_STEP_COUNT - 1)) *
