@@ -3933,7 +3933,11 @@ int msm_comm_qbuf(struct msm_vidc_inst *inst, struct vb2_buffer *vb)
 	if (batch_mode) {
 		int ftb_index = 0, c = 0;
 
-		for (c = 0; atomic_read(&inst->seq_hdr_reqs) > 0; ++c) {
+		/* A request can only be served by an FTB we actually collected;
+		 * any that is left over stays pending for the next queue.
+		 */
+		for (c = 0; c < ftbs.count &&
+				atomic_read(&inst->seq_hdr_reqs) > 0; ++c) {
 			rc = request_seq_header(inst, &ftbs.data[c]);
 			if (rc) {
 				dprintk(VIDC_ERR,
@@ -3989,7 +3993,8 @@ int msm_comm_qbuf(struct msm_vidc_inst *inst, struct vb2_buffer *vb)
 	if (!batch_mode && ftbs.count) {
 		int c = 0;
 
-		for (c = 0; atomic_read(&inst->seq_hdr_reqs) > 0; ++c) {
+		for (c = 0; c < ftbs.count &&
+				atomic_read(&inst->seq_hdr_reqs) > 0; ++c) {
 			rc = request_seq_header(inst, &ftbs.data[c]);
 			if (rc) {
 				dprintk(VIDC_ERR,
