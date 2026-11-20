@@ -22,6 +22,7 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/msm-bus.h>
+#include <linux/mutex.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/regulator/consumer.h>
@@ -119,6 +120,12 @@ struct vmem {
 		struct msm_bus_scale_pdata *pdata;
 		uint32_t priv;
 	} bus;
+	/*
+	 * Held across the allocation count, the bank state and the power
+	 * state, so that no second allocation or free acts on the banks while
+	 * the first one is still switching them.
+	 */
+	struct mutex lock;
 	atomic_t alloc_count;
 	struct dentry *debugfs_root;
 };
@@ -335,24 +342,32 @@ int vmem_allocate(size_t size, phys_addr_t *addr)
 
 	max_size = resource_size(vmem->mem.resource);
 
+	/*
+	 * vmem_free() gives up the count before it powers the banks down, so
+	 * a test after that point would find the count at zero and power on a
+	 * bank that is still being torn down.  Hold the lock across the test,
+	 * the power on and the increment to keep the two apart.
+	 */
+	mutex_lock(&vmem->lock);
+
 	if (atomic_read(&vmem->alloc_count)) {
 		pr_err("Only single allocations allowed for vmem\n");
 		rc = -EEXIST;
-		goto exit;
+		goto unlock;
 	} else if (size > max_size) {
 		pr_err("Out of memory, have max %pa\n", &max_size);
 		rc = -ENOMEM;
-		goto exit;
+		goto unlock;
 	} else if (size != max_size) {
 		pr_err("Only support allocations of size %pa\n", &max_size);
 		rc = -EAGAIN;
-		goto exit;
+		goto unlock;
 	}
 
 	rc = __power_on(vmem);
 	if (rc) {
 		pr_err("Failed power on (%d)\n", rc);
-		goto exit;
+		goto unlock;
 	}
 
 	BUG_ON(vmem->num_banks != DIV_ROUND_UP(size, vmem->bank_size));
@@ -368,7 +383,9 @@ int vmem_allocate(size_t size, phys_addr_t *addr)
 
 	atomic_inc(&vmem->alloc_count);
 	*addr = (phys_addr_t)vmem->mem.resource->start;
-	return 0;
+
+unlock:
+	mutex_unlock(&vmem->lock);
 exit:
 	return rc;
 }
@@ -384,6 +401,8 @@ void vmem_free(phys_addr_t to_free)
 	if (!to_free || !vmem)
 		return;
 
+	mutex_lock(&vmem->lock);
+
 	/*
 	 * Claim the allocation before touching the hardware: a second free
 	 * must not power the banks down again, and must not leave the count
@@ -391,7 +410,7 @@ void vmem_free(phys_addr_t to_free)
 	 */
 	if (atomic_dec_if_positive(&vmem->alloc_count) < 0) {
 		pr_err("VMEM is not allocated, ignoring free\n");
-		return;
+		goto unlock;
 	}
 
 	for (c = 0; c < vmem->num_banks; ++c) {
@@ -408,6 +427,9 @@ void vmem_free(phys_addr_t to_free)
 
 	__disable_interrupts(vmem);
 	__power_off(vmem);
+
+unlock:
+	mutex_unlock(&vmem->lock);
 }
 EXPORT_SYMBOL(vmem_free);
 
@@ -640,6 +662,7 @@ static int vmem_probe(struct platform_device *pdev)
 		return -ENOMEM;
 	}
 
+	mutex_init(&v->lock);
 
 	rc = __init_resources(v, pdev);
 	if (rc) {
