@@ -4659,8 +4659,6 @@ static void msm8996_mi2s_shutdown(struct snd_pcm_substream *substream, u16 port_
 #if defined(CONFIG_SND_SOC_ES9018) && defined(CONFIG_VENDOR_LEECO)
 static int msm8996_sec_mi2s_startup(struct snd_pcm_substream *substream)
 {
-	struct snd_soc_pcm_runtime *rtd = substream->private_data;
-	struct snd_soc_dai *cpu_dai = rtd->cpu_dai;
 	int ret;
 
 	msm_sec_mi2s_data.mi2s_clk.clk_id = Q6AFE_LPASS_CLK_ID_SEC_MI2S_EBIT;
@@ -4679,11 +4677,7 @@ static int msm8996_sec_mi2s_startup(struct snd_pcm_substream *substream)
 		return ret;
 	}
 
-	ret = snd_soc_dai_set_fmt(cpu_dai, SND_SOC_DAIFMT_CBM_CFM);
-	if (ret < 0)
-		pr_err("%s: set fmt cpu dai failed, err:%d\n", __func__, ret);
-
-	return ret;
+	return 0;
 }
 
 static void msm8996_sec_mi2s_shutdown(struct snd_pcm_substream *substream)
