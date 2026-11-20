@@ -18,9 +18,11 @@
 #include <linux/err.h>
 #include <linux/init.h>
 #include <linux/delay.h>
+#include <linux/jiffies.h>
 
 #include <asm/cacheflush.h>
 #include <asm/compiler.h>
+#include <asm/processor.h>
 
 #include <soc/qcom/scm.h>
 
@@ -47,6 +49,9 @@ DEFINE_MUTEX(scm_lmh_lock);
 
 #define SCM_EBUSY_WAIT_MS 30
 #define SCM_EBUSY_MAX_RETRY 67
+
+/* Upper bound on the wait for the secure world to mark a response complete */
+#define SCM_COMPLETE_TIMEOUT_MS 2000
 
 #define N_EXT_SCM_ARGS 7
 #define FIRST_EXT_ARG_IDX 3
@@ -288,7 +293,7 @@ static int scm_call_common(u32 svc_id, u32 cmd_id, const void *cmd_buf,
 {
 	int ret;
 	struct scm_response *rsp;
-	unsigned long start, end;
+	unsigned long start, end, timeout;
 
 	scm_buf->len = scm_buf_length;
 	scm_buf->buf_offset = offsetof(struct scm_command, buf);
@@ -307,9 +312,17 @@ static int scm_call_common(u32 svc_id, u32 cmd_id, const void *cmd_buf,
 	rsp = scm_command_to_response(scm_buf);
 	start = (unsigned long)rsp;
 
-	do {
+	timeout = jiffies + msecs_to_jiffies(SCM_COMPLETE_TIMEOUT_MS);
+	for (;;) {
 		scm_inv_range(start, start + sizeof(*rsp));
-	} while (!rsp->is_complete);
+		if (rsp->is_complete)
+			break;
+		if (time_after(jiffies, timeout)) {
+			pr_err("scm: call 0x%x never completed\n", scm_buf->id);
+			return -ETIMEDOUT;
+		}
+		cpu_relax();
+	}
 
 	end = (unsigned long)scm_get_response_buffer(rsp) + resp_len;
 	scm_inv_range(start, end);
