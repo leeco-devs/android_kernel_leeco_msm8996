@@ -1028,7 +1028,12 @@ static int __free_imem(struct venus_hfi_device *device)
 		/* Follow the semantics of free(NULL), which is a no-op. */
 		break;
 	case IMEM_VMEM:
-		vmem_free(imem->vmem);
+		rc = vmem_free(imem->vmem);
+		if (rc) {
+			dprintk(VIDC_ERR,
+				"Failed to free VMEM IMEM (%d)\n", rc);
+			goto imem_free_failed;
+		}
 		break;
 	default:
 		rc = -ENOTSUPP;
