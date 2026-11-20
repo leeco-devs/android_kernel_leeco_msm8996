@@ -1599,7 +1599,8 @@ static void handle_session_flush(enum hal_command_response cmd, void *data)
 			}
 		}
 	}
-	atomic_dec(&inst->in_flush);
+	if (atomic_dec_if_positive(&inst->in_flush) < 0)
+		dprintk(VIDC_ERR, "Flush done with no flush outstanding\n");
 	flush_event.type = V4L2_EVENT_MSM_VIDC_FLUSH_DONE;
 	ptr = (u32 *)flush_event.u.data;
 
@@ -4714,6 +4715,11 @@ int msm_comm_flush(struct msm_vidc_inst *inst, u32 flags)
 		dprintk(VIDC_DBG, "Send flush Output to firmware\n");
 		rc = call_hfi_op(hdev, session_flush, inst->session,
 				HAL_FLUSH_OUTPUT);
+		if (rc) {
+			dprintk(VIDC_ERR,
+				"Failed to send flush output: %d\n", rc);
+			atomic_dec(&inst->in_flush);
+		}
 	} else {
 		msm_comm_flush_pending_dynamic_buffers(inst);
 		/*
@@ -4751,7 +4757,12 @@ int msm_comm_flush(struct msm_vidc_inst *inst, u32 flags)
 			atomic_inc(&inst->in_flush);
 			dprintk(VIDC_DBG, "Send flush all to firmware\n");
 			rc = call_hfi_op(hdev, session_flush, inst->session,
-				HAL_FLUSH_ALL);
+					HAL_FLUSH_ALL);
+			if (rc) {
+				dprintk(VIDC_ERR,
+					"Failed to send flush all: %d\n", rc);
+				atomic_dec(&inst->in_flush);
+			}
 		}
 	}
 
