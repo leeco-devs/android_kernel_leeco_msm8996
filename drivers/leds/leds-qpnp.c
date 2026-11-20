@@ -2292,8 +2292,7 @@ static int qpnp_pwm_init(struct pwm_config_data *pwm_cfg,
 		if (pwm_cfg->mode == LPG_MODE) {
 			start_idx =
 			pwm_cfg->duty_cycles->start_idx;
-			idx_len =
-			pwm_cfg->duty_cycles->num_duty_pcts;
+			idx_len = pwm_cfg->lut_params.idx_len;
 
 			if (strnstr(name, "kpdbl", sizeof("kpdbl")))
 				lut_max_size = PWM_GPLED_LUT_MAX_SIZE;
@@ -4022,18 +4021,10 @@ static int qpnp_get_config_pwm(struct pwm_config_data *pwm_cfg,
 			pwm_cfg->duty_cycles->num_duty_pcts;
 
 		rc = of_property_read_u32(node, "qcom,idx-len", &val);
-		if (!rc) {
-			/* Never walk past the duty_pcts[] we just read. */
-			if (val <= pwm_cfg->duty_cycles->num_duty_pcts)
-				pwm_cfg->lut_params.idx_len = val;
-			else
-				dev_warn(&pdev->dev,
-					 "qcom,idx-len %u > %lu duty steps\n",
-					 val,
-					 pwm_cfg->duty_cycles->num_duty_pcts);
-		} else if (rc != -EINVAL) {
+		if (!rc)
+			pwm_cfg->lut_params.idx_len = val;
+		else if (rc != -EINVAL)
 			goto bad_lpg_params;
-		}
 	}
 	return 0;
 
