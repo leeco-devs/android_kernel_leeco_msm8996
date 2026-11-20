@@ -266,7 +266,7 @@
 		reg = <0x28>;
 		avdd33-supply = <&pm8994_l21>;
 		dvdd_io-supply = <&pm8994_s4>;
-		interrupt-extended = <&tlmm 73 0x3>,<&spmi_bus 0x0 0xd5 0x0>;
+		interrupts-extended = <&tlmm 73 0x3>,<&spmi_bus 0x0 0xd5 0x0>;
 		p-on-gpio = <&tlmm 81 0x0>;
 		reset-gpio = <&pmi8994_gpios 9 0x0>;
 		cbl-det-gpio = <&pm8994_gpios 22 0x0>;
