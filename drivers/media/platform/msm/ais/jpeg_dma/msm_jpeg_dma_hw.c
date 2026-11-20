@@ -899,7 +899,7 @@ static int msm_jpegdma_hw_calc_config(struct msm_jpegdma_size_config *size_cfg,
 	config->scale_cfg.ver_scale = scale_ver;
 	config->scale_cfg.hor_scale = scale_hor;
 
-	for (i = 0; ARRAY_SIZE(msm_jpegdma_block_sel); i++)
+	for (i = 0; i < ARRAY_SIZE(msm_jpegdma_block_sel); i++)
 		if (scale_hor <= msm_jpegdma_block_sel[i].div)
 			break;
 
