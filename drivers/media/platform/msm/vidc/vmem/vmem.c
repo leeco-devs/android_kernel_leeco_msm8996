@@ -398,12 +398,21 @@ EXPORT_SYMBOL(vmem_allocate);
  * vmem_free: - Frees the memory allocated via vmem_allocate.  Only the address
  * the outstanding allocation was handed can be released; any other address is
  * refused and logged.
+ *
+ * @to_free: address returned by the outstanding vmem_allocate()
+ *
+ * Return: 0 once the allocation is released, or when there is nothing to
+ * release. -EINVAL if the address does not name the outstanding allocation.
+ * -ENOTSUPP if the platform doesn't support VMEM.
  */
-void vmem_free(phys_addr_t to_free)
+int vmem_free(phys_addr_t to_free)
 {
-	int c = 0;
-	if (!to_free || !vmem)
-		return;
+	int c = 0, rc = 0;
+
+	if (!vmem)
+		return -ENOTSUPP;
+	if (!to_free)
+		return 0;
 
 	mutex_lock(&vmem->lock);
 
@@ -415,6 +424,7 @@ void vmem_free(phys_addr_t to_free)
 	if (to_free != vmem->alloc_addr) {
 		pr_err("VMEM free of %pa does not match allocated %pa\n",
 				&to_free, &vmem->alloc_addr);
+		rc = -EINVAL;
 		goto unlock;
 	}
 
@@ -425,6 +435,7 @@ void vmem_free(phys_addr_t to_free)
 	 */
 	if (atomic_dec_if_positive(&vmem->alloc_count) < 0) {
 		pr_err("VMEM is not allocated, ignoring free\n");
+		rc = -EINVAL;
 		goto unlock;
 	}
 
@@ -446,6 +457,7 @@ void vmem_free(phys_addr_t to_free)
 
 unlock:
 	mutex_unlock(&vmem->lock);
+	return rc;
 }
 EXPORT_SYMBOL(vmem_free);
 

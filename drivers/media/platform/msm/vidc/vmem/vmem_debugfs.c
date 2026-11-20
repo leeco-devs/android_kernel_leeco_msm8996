@@ -36,7 +36,21 @@ static int __vmem_alloc_set(void *priv, u64 val)
 
 	switch (val) {
 	case 0: /* free */
-		vmem_free(cookie->addr);
+		if (!cookie->addr) {
+			rc = -EINVAL;
+			break;
+		}
+
+		rc = vmem_free(cookie->addr);
+		if (rc)
+			break;
+
+		/*
+		 * Every allocation is handed the same address, so keeping it
+		 * would let a repeated write of 0 name the next allocation
+		 * instead of being refused.
+		 */
+		cookie->addr = 0;
 		cookie->size = 0;
 		break;
 	default:

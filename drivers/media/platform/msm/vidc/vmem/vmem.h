@@ -17,7 +17,7 @@
 #if (defined CONFIG_MSM_VIDC_VMEM) || (defined CONFIG_MSM_VIDC_VMEM_MODULE)
 
 int vmem_allocate(size_t size, phys_addr_t *addr);
-void vmem_free(phys_addr_t to_free);
+int vmem_free(phys_addr_t to_free);
 
 #else
 
@@ -26,8 +26,9 @@ static inline int vmem_allocate(size_t size, phys_addr_t *addr)
 	return -ENODEV;
 }
 
-static inline void vmem_free(phys_addr_t to_free)
+static inline int vmem_free(phys_addr_t to_free)
 {
+	return 0;
 }
 
 #endif
