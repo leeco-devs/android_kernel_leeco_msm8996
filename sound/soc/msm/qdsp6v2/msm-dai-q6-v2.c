@@ -4105,13 +4105,6 @@ static int msm_dai_q6_mi2s_set_fmt(struct snd_soc_dai *dai, unsigned int fmt)
 		return -EINVAL;
 	}
 
-	if (mi2s_dai_data->ws_src_valid) {
-		mi2s_dai_data->rx_dai.mi2s_dai_data.port_config.i2s.ws_src =
-			mi2s_dai_data->ws_src;
-		mi2s_dai_data->tx_dai.mi2s_dai_data.port_config.i2s.ws_src =
-			mi2s_dai_data->ws_src;
-	}
-
 	return 0;
 }
 
