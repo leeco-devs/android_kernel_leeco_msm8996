@@ -852,7 +852,7 @@ int msm_vdec_streamon(struct msm_vidc_inst *inst, enum v4l2_buf_type i)
 
 int msm_vdec_streamoff(struct msm_vidc_inst *inst, enum v4l2_buf_type i)
 {
-	int rc = 0;
+	int rc = 0, vb2_rc = 0;
 	struct buf_queue *q;
 
 	q = msm_comm_get_vb2q(inst, i);
@@ -871,11 +871,12 @@ int msm_vdec_streamoff(struct msm_vidc_inst *inst, enum v4l2_buf_type i)
 	}
 
 	mutex_lock(&q->lock);
-	rc = vb2_streamoff(&q->vb2_bufq, i);
+	vb2_rc = vb2_streamoff(&q->vb2_bufq, i);
 	mutex_unlock(&q->lock);
-	if (rc)
+	if (vb2_rc)
 		dprintk(VIDC_ERR, "streamoff failed on port: %d\n", i);
-	return rc;
+	/* The state failure matters more: the stream may still be running. */
+	return rc ? rc : vb2_rc;
 }
 
 int msm_vdec_prepare_buf(struct msm_vidc_inst *inst,

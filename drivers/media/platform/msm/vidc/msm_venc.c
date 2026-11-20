@@ -4663,7 +4663,7 @@ int msm_venc_streamon(struct msm_vidc_inst *inst, enum v4l2_buf_type i)
 
 int msm_venc_streamoff(struct msm_vidc_inst *inst, enum v4l2_buf_type i)
 {
-	int rc = 0;
+	int rc = 0, vb2_rc = 0;
 	struct buf_queue *q;
 	q = msm_comm_get_vb2q(inst, i);
 	if (!q) {
@@ -4679,11 +4679,12 @@ int msm_venc_streamoff(struct msm_vidc_inst *inst, enum v4l2_buf_type i)
 			"Failed to move inst: %pK to res done state\n", inst);
 
 	mutex_lock(&q->lock);
-	rc = vb2_streamoff(&q->vb2_bufq, i);
+	vb2_rc = vb2_streamoff(&q->vb2_bufq, i);
 	mutex_unlock(&q->lock);
-	if (rc)
+	if (vb2_rc)
 		dprintk(VIDC_ERR, "streamoff failed on port: %d\n", i);
-	return rc;
+	/* The state failure matters more: the stream may still be running. */
+	return rc ? rc : vb2_rc;
 }
 
 int msm_venc_ctrl_init(struct msm_vidc_inst *inst)

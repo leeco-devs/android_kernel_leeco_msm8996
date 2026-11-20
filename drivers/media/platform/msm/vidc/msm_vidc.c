@@ -1152,15 +1152,29 @@ EXPORT_SYMBOL(msm_vidc_streamon);
 int msm_vidc_streamoff(void *instance, enum v4l2_buf_type i)
 {
 	struct msm_vidc_inst *inst = instance;
+	int rc;
 
 	if (!inst)
 		return -EINVAL;
 
 	if (inst->session_type == MSM_VIDC_DECODER)
-		return msm_vdec_streamoff(inst, i);
-	if (inst->session_type == MSM_VIDC_ENCODER)
-		return msm_venc_streamoff(instance, i);
-	return -EINVAL;
+		rc = msm_vdec_streamoff(inst, i);
+	else if (inst->session_type == MSM_VIDC_ENCODER)
+		rc = msm_venc_streamoff(instance, i);
+	else
+		return -EINVAL;
+
+	/*
+	 * A pending sequence header request is served with a capture buffer of
+	 * this stream, so it must not outlive that buffer.  Drop it only once
+	 * the capture queue has actually stopped: up to that point the request
+	 * can still be honoured by the next buffer the client queues, and a
+	 * failed streamoff leaves the stream running.
+	 */
+	if (!rc && i == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE)
+		atomic_set(&inst->seq_hdr_reqs, 0);
+
+	return rc;
 }
 EXPORT_SYMBOL(msm_vidc_streamoff);
 
