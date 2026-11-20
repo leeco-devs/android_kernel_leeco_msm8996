@@ -22,6 +22,10 @@
 
 #define IPA_DMA_POLLING_MIN_SLEEP_RX 1010
 #define IPA_DMA_POLLING_MAX_SLEEP_RX 1050
+/* Upper bound on the wait for a sync memcpy descriptor to come back */
+#define IPA_DMA_SYNC_MEMCPY_TIMEOUT_MS 1000
+#define IPA_DMA_SYNC_MEMCPY_MAX_POLLS \
+	(IPA_DMA_SYNC_MEMCPY_TIMEOUT_MS * 1000 / IPA_DMA_POLLING_MIN_SLEEP_RX)
 #define IPA_DMA_SYS_DESC_MAX_FIFO_SZ 0x7FF8
 #define IPA_DMA_MAX_PKT_SZ 0xFFFF
 #define IPA_DMA_MAX_PENDING_SYNC (IPA_SYS_DESC_FIFO_SZ / \
@@ -378,6 +382,7 @@ int ipa2_dma_disable(void)
  *		-EPERM: operation not permitted as ipa_dma isn't enable or
  *			initialized
  *		-SPS_ERROR: on sps faliures
+ *		-ETIMEDOUT: the transfer did not complete in time
  *		-EFAULT: other
  */
 int ipa2_dma_sync_memcpy(u64 dest, u64 src, int len)
@@ -385,6 +390,7 @@ int ipa2_dma_sync_memcpy(u64 dest, u64 src, int len)
 	int ep_idx;
 	int res;
 	int i = 0;
+	bool completed = false;
 	struct ipa_sys_context *cons_sys;
 	struct ipa_sys_context *prod_sys;
 	struct sps_iovec iov;
@@ -487,13 +493,17 @@ int ipa2_dma_sync_memcpy(u64 dest, u64 src, int len)
 		/* wait for transfer to complete */
 		res = sps_get_iovec(cons_sys->ep->ep_hdl, &iov);
 		if (res)
-			IPADMA_ERR("Failed: get_iovec, returned %d loop#:%d\n"
-			, res, i);
+			IPADMA_ERR("Failed: get_iovec, returned %d loop#:%d\n",
+				res, i);
+		else if (iov.addr != 0) {
+			completed = true;
+			break;
+		}
 
 		usleep_range(IPA_DMA_POLLING_MIN_SLEEP_RX,
 			IPA_DMA_POLLING_MAX_SLEEP_RX);
 		i++;
-	} while (iov.addr == 0);
+	} while (i < IPA_DMA_SYNC_MEMCPY_MAX_POLLS);
 
 	mutex_lock(&ipa_dma_ctx->sync_lock);
 	list_del(&head_descr->link);
@@ -506,6 +516,16 @@ int ipa2_dma_sync_memcpy(u64 dest, u64 src, int len)
 		complete(&head_descr->xfer_done);
 	}
 	mutex_unlock(&ipa_dma_ctx->sync_lock);
+
+	if (!completed) {
+		IPADMA_ERR("Failed: memcpy did not complete in %d ms\n",
+			IPA_DMA_SYNC_MEMCPY_TIMEOUT_MS);
+		atomic_dec(&ipa_dma_ctx->sync_memcpy_pending_cnt);
+		if (ipa_dma_ctx->destroy_pending && !ipa_dma_work_pending())
+			complete(&ipa_dma_ctx->done);
+		IPADMA_FUNC_EXIT();
+		return -ETIMEDOUT;
+	}
 
 	BUG_ON(dest != iov.addr);
 	BUG_ON(len != iov.size);
