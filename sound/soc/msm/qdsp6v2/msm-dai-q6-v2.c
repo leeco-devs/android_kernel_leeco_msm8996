@@ -122,6 +122,8 @@ struct msm_dai_q6_mi2s_dai_config {
 struct msm_dai_q6_mi2s_dai_data {
 	struct msm_dai_q6_mi2s_dai_config tx_dai;
 	struct msm_dai_q6_mi2s_dai_config rx_dai;
+	bool ws_src_valid;
+	u16 ws_src;
 };
 
 static DEFINE_MUTEX(group_mi2s_mutex);
@@ -4053,6 +4055,9 @@ static int msm_dai_q6_mi2s_hw_params(struct snd_pcm_substream *substream,
 			return -EINVAL;
 		}
 	}
+	if (mi2s_dai_data->ws_src_valid)
+		i2s->ws_src = mi2s_dai_data->ws_src;
+
 	dev_dbg(dai->dev, "%s: dai id %d dai_data->channels = %d\n"
 		"sample_rate = %u i2s_cfg_minor_version = 0x%x\n"
 		"bit_width = %hu  channel_mode = 0x%x mono_stereo = %#x\n"
@@ -4098,6 +4103,13 @@ static int msm_dai_q6_mi2s_set_fmt(struct snd_soc_dai *dai, unsigned int fmt)
 		pr_err("%s: fmt %d\n",
 			__func__, fmt & SND_SOC_DAIFMT_MASTER_MASK);
 		return -EINVAL;
+	}
+
+	if (mi2s_dai_data->ws_src_valid) {
+		mi2s_dai_data->rx_dai.mi2s_dai_data.port_config.i2s.ws_src =
+			mi2s_dai_data->ws_src;
+		mi2s_dai_data->tx_dai.mi2s_dai_data.port_config.i2s.ws_src =
+			mi2s_dai_data->ws_src;
 	}
 
 	return 0;
@@ -5578,6 +5590,7 @@ static int msm_dai_q6_mi2s_dev_probe(struct platform_device *pdev)
 	u32  rx_line = 0;
 	u32 mi2s_intf = 0;
 	struct msm_mi2s_pdata *mi2s_pdata;
+	u32 mi2s_slave;
 	int rc;
 	char boot_marker[40];
 
@@ -5643,6 +5656,23 @@ static int msm_dai_q6_mi2s_dev_probe(struct platform_device *pdev)
 		goto free_pdata;
 	} else
 		dev_set_drvdata(&pdev->dev, dai_data);
+
+	/*
+	 * qcom,msm-mi2s-slave describes the board's clock role, so it has to
+	 * win over the dai_fmt the machine driver asks for. The AFE encoding
+	 * is 1 for CPU master and 0 for CPU slave.
+	 */
+	rc = of_property_read_u32(pdev->dev.of_node, "qcom,msm-mi2s-slave",
+				  &mi2s_slave);
+	if (!rc) {
+		dai_data->ws_src_valid = true;
+		dai_data->ws_src = mi2s_slave ? 0 : 1;
+		dev_dbg(&pdev->dev, "ws_src %u from qcom,msm-mi2s-slave\n",
+			dai_data->ws_src);
+	} else if (rc != -EINVAL) {
+		dev_err(&pdev->dev, "invalid qcom,msm-mi2s-slave: %d\n", rc);
+		goto free_dai_data;
+	}
 
 	pdev->dev.platform_data = mi2s_pdata;
 
