@@ -53,6 +53,15 @@ DEFINE_MUTEX(scm_lmh_lock);
 /* Upper bound on the wait for the secure world to mark a response complete */
 #define SCM_COMPLETE_TIMEOUT_MS 2000
 
+/*
+ * Upper bound on retrying a call the secure world left interrupted. It only
+ * has to outlast a transient interruption, like the completion budget above
+ * and the roughly two seconds the busy path tolerates (SCM_EBUSY_WAIT_MS
+ * times SCM_EBUSY_MAX_RETRY); failing a call that would have gone through
+ * costs more than waiting it out.
+ */
+#define SCM_INTERRUPTED_TIMEOUT_MS 2000
+
 #define N_EXT_SCM_ARGS 7
 #define FIRST_EXT_ARG_IDX 3
 #define SMC_ATOMIC_SYSCALL 31
@@ -192,16 +201,41 @@ static int scm_remap_error(int err)
 	case SCM_EBUSY:
 	case SCM_V2_EBUSY:
 		return -EBUSY;
+	case -ETIMEDOUT:
+		return -ETIMEDOUT;
 	}
 	return -EINVAL;
 }
 
-static u32 smc(u32 cmd_addr)
+/*
+ * SCM_INTERRUPTED asks for the call to be retried, which only helps if the
+ * secure world can be interrupted and make progress in the meantime. A caller
+ * that runs with interrupts disabled has nothing to offer it and would spin
+ * here forever, so stop retrying after a bounded wall-clock wait; the leftover
+ * interrupt status is then reported as a timeout.
+ */
+static bool scm_retry_interrupted(u32 r0, ktime_t timeout)
+{
+	if (r0 != SCM_INTERRUPTED)
+		return false;
+
+	if (!ktime_after(ktime_get(), timeout))
+		return true;
+
+	pr_err("scm: call interrupted for more than %d ms\n",
+	       SCM_INTERRUPTED_TIMEOUT_MS);
+	return false;
+}
+
+static int smc(u32 cmd_addr)
 {
 	int context_id;
+	ktime_t timeout;
 	register u32 r0 asm("r0") = 1;
 	register u32 r1 asm("r1") = (uintptr_t)&context_id;
 	register u32 r2 asm("r2") = cmd_addr;
+
+	timeout = ktime_add_ms(ktime_get(), SCM_INTERRUPTED_TIMEOUT_MS);
 	do {
 		asm volatile(
 			__asmeq("%0", R0_STR)
@@ -215,7 +249,9 @@ static u32 smc(u32 cmd_addr)
 			: "=r" (r0)
 			: "r" (r0), "r" (r1), "r" (r2)
 			: "r3");
-	} while (r0 == SCM_INTERRUPTED);
+	} while (scm_retry_interrupted(r0, timeout));
+	if (r0 == SCM_INTERRUPTED)
+		return -ETIMEDOUT;
 
 	return r0;
 }
@@ -403,7 +439,9 @@ static int __scm_call_armv8_64(u64 x0, u64 x1, u64 x2, u64 x3, u64 x4, u64 x5,
 	register u64 r4 asm("r4") = x4;
 	register u64 r5 asm("r5") = x5;
 	register u64 r6 asm("r6") = 0;
+	ktime_t timeout;
 
+	timeout = ktime_add_ms(ktime_get(), SCM_INTERRUPTED_TIMEOUT_MS);
 	do {
 		asm volatile(
 			__asmeq("%0", R0_STR)
@@ -430,7 +468,9 @@ static int __scm_call_armv8_64(u64 x0, u64 x1, u64 x2, u64 x3, u64 x4, u64 x5,
 			  "r" (r5), "r" (r6)
 			: "x7", "x8", "x9", "x10", "x11", "x12", "x13",
 			  "x14", "x15", "x16", "x17");
-	} while (r0 == SCM_INTERRUPTED);
+	} while (scm_retry_interrupted(r0, timeout));
+	if (r0 == SCM_INTERRUPTED)
+		return -ETIMEDOUT;
 
 	if (ret1)
 		*ret1 = r1;
@@ -452,7 +492,9 @@ static int __scm_call_armv8_32(u32 w0, u32 w1, u32 w2, u32 w3, u32 w4, u32 w5,
 	register u32 r4 asm("r4") = w4;
 	register u32 r5 asm("r5") = w5;
 	register u32 r6 asm("r6") = 0;
+	ktime_t timeout;
 
+	timeout = ktime_add_ms(ktime_get(), SCM_INTERRUPTED_TIMEOUT_MS);
 	do {
 		asm volatile(
 			__asmeq("%0", R0_STR)
@@ -480,7 +522,9 @@ static int __scm_call_armv8_32(u32 w0, u32 w1, u32 w2, u32 w3, u32 w4, u32 w5,
 			: "x7", "x8", "x9", "x10", "x11", "x12", "x13",
 			"x14", "x15", "x16", "x17");
 
-	} while (r0 == SCM_INTERRUPTED);
+	} while (scm_retry_interrupted(r0, timeout));
+	if (r0 == SCM_INTERRUPTED)
+		return -ETIMEDOUT;
 
 	if (ret1)
 		*ret1 = r1;
@@ -504,7 +548,9 @@ static int __scm_call_armv8_32(u32 w0, u32 w1, u32 w2, u32 w3, u32 w4, u32 w5,
 	register u32 r4 asm("r4") = w4;
 	register u32 r5 asm("r5") = w5;
 	register u32 r6 asm("r6") = 0;
+	ktime_t timeout;
 
+	timeout = ktime_add_ms(ktime_get(), SCM_INTERRUPTED_TIMEOUT_MS);
 	do {
 		asm volatile(
 			__asmeq("%0", R0_STR)
@@ -530,7 +576,9 @@ static int __scm_call_armv8_32(u32 w0, u32 w1, u32 w2, u32 w3, u32 w4, u32 w5,
 			: "r" (r0), "r" (r1), "r" (r2), "r" (r3), "r" (r4),
 			 "r" (r5), "r" (r6));
 
-	} while (r0 == SCM_INTERRUPTED);
+	} while (scm_retry_interrupted(r0, timeout));
+	if (r0 == SCM_INTERRUPTED)
+		return -ETIMEDOUT;
 
 	if (ret1)
 		*ret1 = r1;
@@ -1079,6 +1127,7 @@ EXPORT_SYMBOL(scm_call_atomic5_3);
 u32 scm_get_version(void)
 {
 	int context_id;
+	ktime_t timeout;
 	static u32 version = -1;
 	register u32 r0 asm("r0");
 	register u32 r1 asm("r1");
@@ -1090,6 +1139,8 @@ u32 scm_get_version(void)
 
 	r0 = 0x1 << 8;
 	r1 = (uintptr_t)&context_id;
+
+	timeout = ktime_add_ms(ktime_get(), SCM_INTERRUPTED_TIMEOUT_MS);
 	do {
 		asm volatile(
 			__asmeq("%0", R0_STR)
@@ -1103,7 +1154,11 @@ u32 scm_get_version(void)
 			: "=r" (r0), "=r" (r1)
 			: "r" (r0), "r" (r1)
 			: "r2", "r3");
-	} while (r0 == SCM_INTERRUPTED);
+	} while (scm_retry_interrupted(r0, timeout));
+	if (r0 == SCM_INTERRUPTED) {
+		mutex_unlock(&scm_lock);
+		return version;
+	}
 
 	version = r1;
 	mutex_unlock(&scm_lock);
