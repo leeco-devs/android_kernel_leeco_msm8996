@@ -231,12 +231,21 @@ static int smc(u32 cmd_addr)
 {
 	int context_id;
 	ktime_t timeout;
-	register u32 r0 asm("r0") = 1;
-	register u32 r1 asm("r1") = (uintptr_t)&context_id;
-	register u32 r2 asm("r2") = cmd_addr;
+	register u32 r0 asm("r0");
+	register u32 r1 asm("r1");
+	register u32 r2 asm("r2");
 
+	/*
+	 * The monitor returns its status in r0 and is free to clobber the
+	 * argument registers, so a retry has to reload the original
+	 * arguments; keeping the registers would send the status of the
+	 * interrupted call back as the command.
+	 */
 	timeout = ktime_add_ms(ktime_get(), SCM_INTERRUPTED_TIMEOUT_MS);
 	do {
+		r0 = 1;
+		r1 = (uintptr_t)&context_id;
+		r2 = cmd_addr;
 		asm volatile(
 			__asmeq("%0", R0_STR)
 			__asmeq("%1", R0_STR)
@@ -432,17 +441,24 @@ int scm_call_noalloc(u32 svc_id, u32 cmd_id, const void *cmd_buf,
 static int __scm_call_armv8_64(u64 x0, u64 x1, u64 x2, u64 x3, u64 x4, u64 x5,
 				u64 *ret1, u64 *ret2, u64 *ret3)
 {
-	register u64 r0 asm("r0") = x0;
-	register u64 r1 asm("r1") = x1;
-	register u64 r2 asm("r2") = x2;
-	register u64 r3 asm("r3") = x3;
-	register u64 r4 asm("r4") = x4;
-	register u64 r5 asm("r5") = x5;
-	register u64 r6 asm("r6") = 0;
+	register u64 r0 asm("r0");
+	register u64 r1 asm("r1");
+	register u64 r2 asm("r2");
+	register u64 r3 asm("r3");
+	register u64 r4 asm("r4");
+	register u64 r5 asm("r5");
+	register u64 r6 asm("r6");
 	ktime_t timeout;
 
 	timeout = ktime_add_ms(ktime_get(), SCM_INTERRUPTED_TIMEOUT_MS);
 	do {
+		r0 = x0;
+		r1 = x1;
+		r2 = x2;
+		r3 = x3;
+		r4 = x4;
+		r5 = x5;
+		r6 = 0;
 		asm volatile(
 			__asmeq("%0", R0_STR)
 			__asmeq("%1", R1_STR)
@@ -485,17 +501,24 @@ static int __scm_call_armv8_64(u64 x0, u64 x1, u64 x2, u64 x3, u64 x4, u64 x5,
 static int __scm_call_armv8_32(u32 w0, u32 w1, u32 w2, u32 w3, u32 w4, u32 w5,
 				u64 *ret1, u64 *ret2, u64 *ret3)
 {
-	register u32 r0 asm("r0") = w0;
-	register u32 r1 asm("r1") = w1;
-	register u32 r2 asm("r2") = w2;
-	register u32 r3 asm("r3") = w3;
-	register u32 r4 asm("r4") = w4;
-	register u32 r5 asm("r5") = w5;
-	register u32 r6 asm("r6") = 0;
+	register u32 r0 asm("r0");
+	register u32 r1 asm("r1");
+	register u32 r2 asm("r2");
+	register u32 r3 asm("r3");
+	register u32 r4 asm("r4");
+	register u32 r5 asm("r5");
+	register u32 r6 asm("r6");
 	ktime_t timeout;
 
 	timeout = ktime_add_ms(ktime_get(), SCM_INTERRUPTED_TIMEOUT_MS);
 	do {
+		r0 = w0;
+		r1 = w1;
+		r2 = w2;
+		r3 = w3;
+		r4 = w4;
+		r5 = w5;
+		r6 = 0;
 		asm volatile(
 			__asmeq("%0", R0_STR)
 			__asmeq("%1", R1_STR)
@@ -541,17 +564,24 @@ static int __scm_call_armv8_32(u32 w0, u32 w1, u32 w2, u32 w3, u32 w4, u32 w5,
 static int __scm_call_armv8_32(u32 w0, u32 w1, u32 w2, u32 w3, u32 w4, u32 w5,
 				u64 *ret1, u64 *ret2, u64 *ret3)
 {
-	register u32 r0 asm("r0") = w0;
-	register u32 r1 asm("r1") = w1;
-	register u32 r2 asm("r2") = w2;
-	register u32 r3 asm("r3") = w3;
-	register u32 r4 asm("r4") = w4;
-	register u32 r5 asm("r5") = w5;
-	register u32 r6 asm("r6") = 0;
+	register u32 r0 asm("r0");
+	register u32 r1 asm("r1");
+	register u32 r2 asm("r2");
+	register u32 r3 asm("r3");
+	register u32 r4 asm("r4");
+	register u32 r5 asm("r5");
+	register u32 r6 asm("r6");
 	ktime_t timeout;
 
 	timeout = ktime_add_ms(ktime_get(), SCM_INTERRUPTED_TIMEOUT_MS);
 	do {
+		r0 = w0;
+		r1 = w1;
+		r2 = w2;
+		r3 = w3;
+		r4 = w4;
+		r5 = w5;
+		r6 = 0;
 		asm volatile(
 			__asmeq("%0", R0_STR)
 			__asmeq("%1", R1_STR)
@@ -1137,11 +1167,10 @@ u32 scm_get_version(void)
 
 	mutex_lock(&scm_lock);
 
-	r0 = 0x1 << 8;
-	r1 = (uintptr_t)&context_id;
-
 	timeout = ktime_add_ms(ktime_get(), SCM_INTERRUPTED_TIMEOUT_MS);
 	do {
+		r0 = 0x1 << 8;
+		r1 = (uintptr_t)&context_id;
 		asm volatile(
 			__asmeq("%0", R0_STR)
 			__asmeq("%1", R1_STR)
