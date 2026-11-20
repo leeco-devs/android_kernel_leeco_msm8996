@@ -384,7 +384,15 @@ void vmem_free(phys_addr_t to_free)
 	if (!to_free || !vmem)
 		return;
 
-	BUG_ON(atomic_read(&vmem->alloc_count) == 0);
+	/*
+	 * Claim the allocation before touching the hardware: a second free
+	 * must not power the banks down again, and must not leave the count
+	 * negative where vmem_allocate() would refuse every later request.
+	 */
+	if (atomic_dec_if_positive(&vmem->alloc_count) < 0) {
+		pr_err("VMEM is not allocated, ignoring free\n");
+		return;
+	}
 
 	for (c = 0; c < vmem->num_banks; ++c) {
 		enum bank_state curr_state = __bank_get_state(vmem, c);
@@ -400,7 +408,6 @@ void vmem_free(phys_addr_t to_free)
 
 	__disable_interrupts(vmem);
 	__power_off(vmem);
-	atomic_dec(&vmem->alloc_count);
 }
 EXPORT_SYMBOL(vmem_free);
 
