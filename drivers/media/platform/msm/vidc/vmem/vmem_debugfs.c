@@ -55,7 +55,13 @@ static int __vmem_alloc_set(void *priv, u64 val)
 		break;
 	default:
 		rc = vmem_allocate(val, &cookie->addr);
-		cookie->size = val;
+		/*
+		 * vmem_allocate() leaves *addr alone when it fails, so the
+		 * cookie still names the outstanding allocation, if any. The
+		 * size has to keep describing that allocation too.
+		 */
+		if (!rc)
+			cookie->size = val;
 		break;
 	}
 
