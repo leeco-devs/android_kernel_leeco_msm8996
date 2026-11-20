@@ -23,6 +23,10 @@
 
 #define IPA_DMA_POLLING_MIN_SLEEP_RX 1010
 #define IPA_DMA_POLLING_MAX_SLEEP_RX 1050
+/* Upper bound on the wait for a sync memcpy descriptor to come back */
+#define IPA_DMA_SYNC_MEMCPY_TIMEOUT_MS 1000
+#define IPA_DMA_SYNC_MEMCPY_MAX_POLLS \
+	(IPA_DMA_SYNC_MEMCPY_TIMEOUT_MS * 1000 / IPA_DMA_POLLING_MIN_SLEEP_RX)
 #define IPA_DMA_SYS_DESC_MAX_FIFO_SZ 0x7FF8
 #define IPA_DMA_MAX_PKT_SZ 0xFFFF
 #define IPA_DMA_MAX_PENDING_SYNC (IPA_SYS_DESC_FIFO_SZ / \
@@ -362,6 +366,7 @@ int ipa3_dma_disable(void)
  *		-EPERM: operation not permitted as ipa_dma isn't enable or
  *			initialized
  *		-SPS_ERROR: on sps faliures
+ *		-ETIMEDOUT: the transfer did not complete in time
  *		-EFAULT: other
  */
 int ipa3_dma_sync_memcpy(u64 dest, u64 src, int len)
@@ -520,13 +525,16 @@ int ipa3_dma_sync_memcpy(u64 dest, u64 src, int len)
 				IPADMA_ERR(
 					"Failed: get_iovec, returned %d loop#:%d\n",
 					res, i);
-			if (iov.addr != 0)
+			else if (iov.addr != 0)
 				stop_polling = true;
 		}
 		usleep_range(IPA_DMA_POLLING_MIN_SLEEP_RX,
 			IPA_DMA_POLLING_MAX_SLEEP_RX);
 		i++;
-	} while (!stop_polling);
+	} while (!stop_polling && i < IPA_DMA_SYNC_MEMCPY_MAX_POLLS);
+
+	if (!stop_polling)
+		goto unlink;
 
 	if (ipa3_ctx->transport_prototype == IPA_TRANSPORT_TYPE_GSI) {
 		BUG_ON(len != gsi_notify.bytes_xfered);
@@ -537,6 +545,7 @@ int ipa3_dma_sync_memcpy(u64 dest, u64 src, int len)
 		BUG_ON(len != iov.size);
 	}
 
+unlink:
 	mutex_lock(&ipa3_dma_ctx->sync_lock);
 	list_del(&head_descr->link);
 	cons_sys->len--;
@@ -548,6 +557,17 @@ int ipa3_dma_sync_memcpy(u64 dest, u64 src, int len)
 		complete(&head_descr->xfer_done);
 	}
 	mutex_unlock(&ipa3_dma_ctx->sync_lock);
+
+	if (!stop_polling) {
+		IPADMA_ERR("Failed: memcpy did not complete in %d ms\n",
+			IPA_DMA_SYNC_MEMCPY_TIMEOUT_MS);
+		atomic_dec(&ipa3_dma_ctx->sync_memcpy_pending_cnt);
+		if (ipa3_dma_ctx->destroy_pending &&
+				!ipa3_dma_work_pending())
+			complete(&ipa3_dma_ctx->done);
+		IPADMA_FUNC_EXIT();
+		return -ETIMEDOUT;
+	}
 
 	atomic_inc(&ipa3_dma_ctx->total_sync_memcpy);
 	atomic_dec(&ipa3_dma_ctx->sync_memcpy_pending_cnt);
