@@ -127,6 +127,8 @@ struct vmem {
 	 */
 	struct mutex lock;
 	atomic_t alloc_count;
+	/* Address handed out by the outstanding allocation, 0 if none. */
+	phys_addr_t alloc_addr;
 	struct dentry *debugfs_root;
 };
 
@@ -382,7 +384,8 @@ int vmem_allocate(size_t size, phys_addr_t *addr)
 	__enable_interrupts(vmem);
 
 	atomic_inc(&vmem->alloc_count);
-	*addr = (phys_addr_t)vmem->mem.resource->start;
+	vmem->alloc_addr = (phys_addr_t)vmem->mem.resource->start;
+	*addr = vmem->alloc_addr;
 
 unlock:
 	mutex_unlock(&vmem->lock);
@@ -392,8 +395,9 @@ exit:
 EXPORT_SYMBOL(vmem_allocate);
 
 /**
- * vmem_free: - Frees the memory allocated via vmem_allocate.  Undefined
- * behaviour if to_free is a not a pointer returned via vmem_allocate
+ * vmem_free: - Frees the memory allocated via vmem_allocate.  Only the address
+ * the outstanding allocation was handed can be released; any other address is
+ * refused and logged.
  */
 void vmem_free(phys_addr_t to_free)
 {
@@ -402,6 +406,17 @@ void vmem_free(phys_addr_t to_free)
 		return;
 
 	mutex_lock(&vmem->lock);
+
+	/*
+	 * Only the allocation that is outstanding can be released: a caller
+	 * that kept an address from an earlier allocation, or that passes
+	 * something else entirely, must not take down what is allocated now.
+	 */
+	if (to_free != vmem->alloc_addr) {
+		pr_err("VMEM free of %pa does not match allocated %pa\n",
+				&to_free, &vmem->alloc_addr);
+		goto unlock;
+	}
 
 	/*
 	 * Claim the allocation before touching the hardware: a second free
@@ -427,6 +442,7 @@ void vmem_free(phys_addr_t to_free)
 
 	__disable_interrupts(vmem);
 	__power_off(vmem);
+	vmem->alloc_addr = 0;
 
 unlock:
 	mutex_unlock(&vmem->lock);
