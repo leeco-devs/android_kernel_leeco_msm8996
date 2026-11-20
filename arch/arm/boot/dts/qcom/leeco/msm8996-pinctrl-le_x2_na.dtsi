@@ -494,7 +494,7 @@
 		config {
 			pins = "gpio85", "gpio86";
 			drive-strength = <2>;
-			bias_disable = <0>;
+			bias-disable;
 			output-low;
 		};
 	};
