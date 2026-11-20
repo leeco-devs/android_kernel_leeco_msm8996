@@ -1950,9 +1950,19 @@ int buf_ref_put(struct msm_vidc_inst *inst, struct buffer_info *binfo)
 	if (!inst || !binfo)
 		return -EINVAL;
 
-	atomic_dec(&binfo->ref_count);
-	cnt = atomic_read(&binfo->ref_count);
+	/*
+	 * atomic_dec_if_positive() returns the new count, or -1 when the
+	 * count was already zero and nothing was decremented.  Leaving a
+	 * stray put alone keeps the release and re-queue cases below from
+	 * being skipped by a count that can no longer match them.
+	 */
+	cnt = atomic_dec_if_positive(&binfo->ref_count);
 	dprintk(VIDC_DBG, "REF_PUT[%d] fd[0] = %d\n", cnt, binfo->fd[0]);
+	if (cnt < 0) {
+		dprintk(VIDC_ERR, "No reference to put, fd[0] = %d\n",
+				binfo->fd[0]);
+		return -EINVAL;
+	}
 	if (!cnt)
 		release_buf = true;
 	else if (cnt == 1)
