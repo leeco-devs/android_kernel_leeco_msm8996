@@ -3096,10 +3096,10 @@ static int hif_log_soc_wakeup_timeout(struct hif_pci_softc *sc)
 	uint32_t bar = 0;
 	struct hif_opaque_softc *hif_hdl = GET_HIF_OPAQUE_HDL(sc);
 	struct hif_softc *scn = HIF_GET_SOFTC(sc);
-	struct HIF_CE_state *hif_state = HIF_GET_CE_STATE(sc);
+	struct HIF_CE_state *hif_state __maybe_unused = HIF_GET_CE_STATE(sc);
 	struct hif_config_info *cfg = hif_get_ini_handle(hif_hdl);
 	struct hif_driver_state_callbacks *cbk = hif_get_callbacks_handle(scn);
-	A_target_id_t pci_addr = scn->mem;
+	A_target_id_t pci_addr __maybe_unused = scn->mem;
 
 	HIF_ERROR("%s: keep_awake_count = %d",
 			__func__, hif_state->keep_awake_count);

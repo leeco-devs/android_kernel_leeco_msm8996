@@ -176,6 +176,11 @@ typedef void (*ol_txrx_completion_fp)(struct sk_buff *skb,
  * @osif_dev - the virtual device's OS shim object
  * @tx_resume - tx os q should be resumed or not
  */
+/* Also defined under QCA_LL_LEGACY_TX_FLOW_CONTROL in
+ * cdp_txrx_flow_ctrl_legacy.h
+ */
+#ifndef QCA_OL_TXRX_FC_TYPEDEFS_DEFINED
+#define QCA_OL_TXRX_FC_TYPEDEFS_DEFINED
 typedef void (*ol_txrx_tx_flow_control_fp)(void *osif_dev,
 					    bool tx_resume);
 /**
@@ -186,6 +191,7 @@ typedef void (*ol_txrx_tx_flow_control_fp)(void *osif_dev,
  * Return: true if tx is paused by flow control
  */
 typedef bool (*ol_txrx_tx_flow_control_is_pause_fp)(void *osif_dev);
+#endif /* QCA_OL_TXRX_FC_TYPEDEFS_DEFINED */
 
 /**
  * ol_txrx_rx_fp - receive function to hand batches of data

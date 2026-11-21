@@ -16,6 +16,9 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
+int athdiag_procfs_init(void *scn);
+void athdiag_procfs_remove(void);
+
 #if defined(CONFIG_ATH_PROCFS_DIAG_SUPPORT)
 #include <linux/module.h>       /* Specifically, a module */
 #include <linux/kernel.h>       /* We're doing kernel work */

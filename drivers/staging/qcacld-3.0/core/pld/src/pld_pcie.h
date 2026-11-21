@@ -186,14 +186,22 @@ static inline int pld_pcie_power_off(struct device *dev)
 	return 0;
 }
 #else
+/*
+ * The cnss driver in this tree (drivers/net/wireless/cnss) keeps its IOMMU
+ * mapping private and exports no cnss_smmu_get_mapping()/cnss_smmu_map().
+ * It only attaches a domain when the board DTS provides
+ * qcom,wlan-smmu-iova-address, and no LeEco board does, so report "no stage
+ * 1 mapping": qdf_mem then uses physical addresses and
+ * cds_smmu_mem_map_setup() keeps SMMU S1 off, as on the stock kernel.
+ */
 static inline void *pld_pcie_smmu_get_mapping(void)
 {
-	return cnss_smmu_get_mapping();
+	return NULL;
 }
 static inline int pld_pcie_smmu_map(phys_addr_t paddr,
 				    uint32_t *iova_addr, size_t size)
 {
-	return cnss_smmu_map(paddr, iova_addr, size);
+	return 0;
 }
 int pld_pcie_get_fw_files_for_target(struct pld_fw_files *pfw_files,
 				     u32 target_type, u32 target_version);

@@ -75,6 +75,9 @@ enum netif_reason_type {
 
 #ifdef QCA_LL_LEGACY_TX_FLOW_CONTROL
 
+/* Also defined unconditionally in cdp_txrx_cmn.h */
+#ifndef QCA_OL_TXRX_FC_TYPEDEFS_DEFINED
+#define QCA_OL_TXRX_FC_TYPEDEFS_DEFINED
 /**
  * ol_txrx_tx_flow_control_is_pause_fp - is tx paused by flow control
  * function from txrx to OS shim
@@ -91,6 +94,7 @@ typedef bool (*ol_txrx_tx_flow_control_is_pause_fp)(void *osif_dev);
  */
 typedef void (*ol_txrx_tx_flow_control_fp)(void *osif_dev,
 			 bool tx_resume);
+#endif /* QCA_OL_TXRX_FC_TYPEDEFS_DEFINED */
 
 /**
  * ol_txrx_register_tx_flow_control() - register tx flow control callback
